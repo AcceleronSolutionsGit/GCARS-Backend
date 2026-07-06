@@ -1,11 +1,75 @@
-const express = require('express');
-const bcrypt = require('bcryptjs');
-const db = require('../db');
-const { authMiddleware, superAdminOnly, cfoOrAdmin } = require('../middleware/auth');
-const router = express.Router();
+/**
+ * ============================================================
+ *  G-CARS 2 — Super-Admin Routes
+ * ============================================================
+ *  All system-administration endpoints. Most routes require the
+ *  `superAdminOnly` or `cfoOrAdmin` middleware guard.
+ *
+ *  ── Users (superAdminOnly)
+ *    GET    /users              – List all users (paginated, searchable)
+ *    POST   /users              – Create a new user account
+ *    PUT    /users/:id          – Update a user account
+ *    DELETE /users/:id          – Soft-delete a user account
+ *
+ *  ── Dashboard & Allocations (cfoOrAdmin)
+ *    GET    /dashboard          – Admin dashboard KPIs
+ *    GET    /allocations        – List budget allocations (paginated)
+ *    POST   /allocations        – Create a new allocation
+ *    PUT    /allocations/:id    – Update an allocation
+ *    DELETE /allocations/:id    – Soft-delete an allocation
+ *
+ *  ── Workflow Matrix (superAdminOnly)
+ *    GET    /workflow-matrix      – List all approval matrix configs
+ *    GET    /workflow-matrix/:id  – Get a single matrix config
+ *    POST   /workflow-matrix      – Create / assign a matrix config
+ *    DELETE /workflow-matrix/:id  – Remove a matrix config
+ *
+ *  ── Approval Workflow (CRUD)
+ *    GET    /workflows               – List named workflow templates
+ *    POST   /workflows               – Create a workflow template
+ *    PUT    /workflows/:id           – Update a workflow template
+ *    DELETE /workflows/:id           – Delete a workflow template
+ *    GET    /workflow                – List all workflow steps
+ *    POST   /workflow                – Create a workflow step
+ *    PUT    /workflow/bulk-toggle    – Enable / disable all steps
+ *    PUT    /workflow/:id            – Update a single step
+ *    PUT    /workflow/:id/toggle     – Toggle a single step active/inactive
+ *    DELETE /workflow/:id            – Delete a step
+ *    PUT    /workflow-reorder        – Bulk reorder steps by position
+ *    POST   /workflow-seed-defaults  – Seed default workflow configuration
+ *
+ *  ── Roles & Permissions
+ *    GET    /roles                    – List all roles
+ *    GET    /permissions              – List all permissions
+ *    GET    /roles/:id/permissions    – Get permissions for a role
+ *    POST   /roles/:id/permissions    – Assign permissions to a role
+ *    POST   /roles                    – Create a role
+ *    DELETE /roles/:id                – Delete a role
+ *
+ *  ── Master Data (write) — Locations, SBUs, Employees,
+ *                            Broad Functions, Asset Groups,
+ *                            Budget Owners, Accountants
+ *    GET / POST / PUT / DELETE per entity (see banners below)
+ *
+ *  ── Lookup / Single-record GET endpoints (all at bottom)
+ *    GET /employees/:emp_no, /locations/:id, /sbus/:id, etc.
+ * ============================================================
+ */
 
-// General authentication for all superadmin routes
+const express = require('express');
+const bcrypt  = require('bcryptjs');
+const db      = require('../db');
+const { authMiddleware, superAdminOnly, cfoOrAdmin } = require('../middleware/auth');
+const router  = express.Router();
+
+// Apply JWT authentication to every route in this file
 router.use(authMiddleware);
+
+// ═══════════════════════════════════════════════════════════════
+//  SECTION: USERS
+//  Manage login accounts in the `users` table.
+//  All routes in this section require superAdminOnly.
+// ═══════════════════════════════════════════════════════════════
 
 // GET /api/superadmin/users - list all users with roles
 router.get('/users', superAdminOnly, async (req, res) => {
@@ -74,10 +138,10 @@ router.post('/users', superAdminOnly, async (req, res) => {
 
     if (emp_no) {
       await db.query(`
-        INSERT INTO capex_master_employee (emp_no, name, email, sbu, location, rpt_code, b_func, b_func_id, status, created_at)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, NOW())
-        ON DUPLICATE KEY UPDATE name=VALUES(name), email=VALUES(email), sbu=VALUES(sbu), location=VALUES(location), rpt_code=VALUES(rpt_code), b_func=VALUES(b_func), b_func_id=VALUES(b_func_id), status=VALUES(status)
-      `, [emp_no, req.body.full_name || username, email, req.body.sbu || '', req.body.location || '', req.body.rpt_code || '', b_func || '', b_func_id || null, status]);
+        INSERT INTO capex_master_employee (emp_no, name, email, sbu, location, rpt_code, b_func, b_func_id, status, created_at, sbu_id, location_id)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, NOW(), ?, ?)
+        ON DUPLICATE KEY UPDATE name=VALUES(name), email=VALUES(email), sbu=VALUES(sbu), location=VALUES(location), rpt_code=VALUES(rpt_code), b_func=VALUES(b_func), b_func_id=VALUES(b_func_id), status=VALUES(status), sbu_id=VALUES(sbu_id), location_id=VALUES(location_id)
+      `, [emp_no, req.body.full_name || username, email, req.body.sbu || '', req.body.location || '', req.body.rpt_code || '', b_func || '', b_func_id || null, status, req.body.sbu_id || 1, req.body.location_id || 1]);
     }
 
     if (role_ids.length) {
@@ -117,10 +181,10 @@ router.put('/users/:id', superAdminOnly, async (req, res) => {
     const [u] = await db.query('SELECT username, email, emp_no FROM users WHERE id = ?', [req.params.id]);
     if (u.length && u[0].emp_no) {
       await db.query(`
-        INSERT INTO capex_master_employee (emp_no, name, email, sbu, location, rpt_code, b_func, b_func_id, status, created_at)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, NOW())
-        ON DUPLICATE KEY UPDATE name=VALUES(name), email=VALUES(email), sbu=VALUES(sbu), location=VALUES(location), rpt_code=VALUES(rpt_code), b_func=VALUES(b_func), b_func_id=VALUES(b_func_id), status=VALUES(status)
-      `, [u[0].emp_no, req.body.full_name || u[0].username, u[0].email, req.body.sbu || '', req.body.location || '', req.body.rpt_code || '', b_func || '', b_func_id || null, status || 'Active']);
+        INSERT INTO capex_master_employee (emp_no, name, email, sbu, location, rpt_code, b_func, b_func_id, status, created_at, sbu_id, location_id)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, NOW(), ?, ?)
+        ON DUPLICATE KEY UPDATE name=VALUES(name), email=VALUES(email), sbu=VALUES(sbu), location=VALUES(location), rpt_code=VALUES(rpt_code), b_func=VALUES(b_func), b_func_id=VALUES(b_func_id), status=VALUES(status), sbu_id=VALUES(sbu_id), location_id=VALUES(location_id)
+      `, [u[0].emp_no, req.body.full_name || u[0].username, u[0].email, req.body.sbu || '', req.body.location || '', req.body.rpt_code || '', b_func || '', b_func_id || null, status || 'Active', req.body.sbu_id || 1, req.body.location_id || 1]);
     }
 
     if (role_ids !== undefined) {
@@ -152,6 +216,12 @@ router.delete('/users/:id', superAdminOnly, async (req, res) => {
 // CFO & ADMIN SHARED ROUTES (Lower Restriction)
 // ─────────────────────────────────────────────────────
 
+
+// ═══════════════════════════════════════════════════════════════
+//  SECTION: DASHBOARD & ADMIN KPIs
+//  High-level statistics for the admin overview page.
+// ═══════════════════════════════════════════════════════════════
+
 // GET /api/superadmin/dashboard - system metrics
 router.get('/dashboard', cfoOrAdmin, async (req, res) => {
   try {
@@ -163,6 +233,7 @@ router.get('/dashboard', cfoOrAdmin, async (req, res) => {
     const [resEmployees] = await db.query('SELECT COUNT(*) as totalEmployees FROM capex_master_employee WHERE status = "Active"');
     const [resBudget] = await db.query('SELECT COALESCE(SUM(budgeted_amount),0) as totalBudget FROM capex_allocation WHERE status = "Active"');
     const [resConsumed] = await db.query('SELECT COALESCE(SUM(budget_amount_consumed),0) as consumedBudget FROM capex_allocation WHERE status = "Active"');
+    const [resCommitted] = await db.query('SELECT COALESCE(SUM(committed_amount),0) as committedBudget FROM capex_allocation WHERE status = "Active"');
 
     // Recent requests
     const [recentRequests] = await db.query(
@@ -183,7 +254,8 @@ router.get('/dashboard', cfoOrAdmin, async (req, res) => {
         rejectedRequests: resRejected[0]?.rejectedRequests || 0, 
         totalEmployees: resEmployees[0]?.totalEmployees || 0, 
         totalBudget: resBudget[0]?.totalBudget || 0, 
-        consumedBudget: resConsumed[0]?.consumedBudget || 0 
+        consumedBudget: resConsumed[0]?.consumedBudget || 0,
+        committedBudget: resCommitted[0]?.committedBudget || 0
       },
       recentRequests,
     });
@@ -193,7 +265,14 @@ router.get('/dashboard', cfoOrAdmin, async (req, res) => {
   }
 });
 
-// GET /api/superadmin/allocations - list all allocations with pagination/filters
+
+// ═══════════════════════════════════════════════════════════════
+//  SECTION: BUDGET ALLOCATIONS
+//  CRUD for budget allocations and related budget entities.
+//  Requires cfoOrAdmin access.
+// ═══════════════════════════════════════════════════════════════
+
+// GET /api/superadmin/allocations - list allocations with pagination/filters
 router.get('/allocations', cfoOrAdmin, async (req, res) => {
   try {
     const { year, page = 1, limit = 50, search = '', asset_group, budget_type } = req.query;
@@ -348,6 +427,13 @@ router.get('/masters', cfoOrAdmin, async (req, res) => {
     }
 });
 
+
+// ═══════════════════════════════════════════════════════════════
+//  SECTION: SYSTEM SETTINGS
+//  Global key/value application settings (e.g. fiscal year,
+//  request limits, feature flags).
+// ═══════════════════════════════════════════════════════════════
+
 // GET /api/superadmin/settings - fetch system settings (Shared)
 router.get('/settings', cfoOrAdmin, async (req, res) => {
   try {
@@ -383,11 +469,19 @@ router.post('/settings', cfoOrAdmin, async (req, res) => {
 
 router.use(superAdminOnly);
 
+
+// ═══════════════════════════════════════════════════════════════
+//  SECTION: WORKFLOW MATRIX
+//  Maps workflow templates to specific SBU/location/request-type
+//  combinations (which approval chain applies to which requester).
+// ═══════════════════════════════════════════════════════════════
+
 // GET /api/superadmin/workflow-matrix - List all mappings grouped by matrix_id
 router.get('/workflow-matrix', superAdminOnly, async (req, res) => {
   try {
     const [rows] = await db.query(
-      `SELECT m.id, m.asset_group, m.asset_type, m.status,
+      `SELECT m.id, CONCAT(m.id, '_', COALESCE(c.broad_function_head, '0')) as unique_id, 
+              m.asset_group, m.asset_type, m.status,
               ag.name as asset_group_name, at2.asset_name as asset_type_name,
               GROUP_CONCAT(DISTINCT c.sbu) as sbu, 
               GROUP_CONCAT(DISTINCT c.b_fun) as b_fun,
@@ -399,7 +493,7 @@ router.get('/workflow-matrix', superAdminOnly, async (req, res) => {
        LEFT JOIN capex_budget_determination_matrix_combination c ON c.budget_matrix_id = m.id
        LEFT JOIN capex_master_broad_function_head bfh ON bfh.id = c.broad_function_head
        LEFT JOIN capex_master_employee me ON me.emp_no = bfh.emp_no
-       GROUP BY m.id
+       GROUP BY m.id, c.broad_function_head
        ORDER BY ag.name, at2.asset_name`
     );
 
@@ -572,7 +666,13 @@ router.delete('/workflow-matrix/:id', async (req, res) => {
   }
 });
 
-// GET /api/superadmin/broad-functions
+
+// ═══════════════════════════════════════════════════════════════
+//  SECTION: BROAD FUNCTIONS (read)
+//  Lookup endpoint for department / broad-function names.
+// ═══════════════════════════════════════════════════════════════
+
+// GET /api/superadmin/broad-functions - list all broad functions
 router.get('/broad-functions', async (req, res) => {
   try {
     const { search = '', page = 1, limit = 50, all = false } = req.query;
@@ -667,6 +767,11 @@ router.delete('/asset-types/:id', async (req, res) => {
     res.status(500).json({ success: false, message: 'Server error' });
   }
 });
+
+
+// ═══════════════════════════════════════════════════════════════
+//  SECTION: ASSET GROUPS (read)
+// ═══════════════════════════════════════════════════════════════
 
 // GET /api/superadmin/asset-groups
 router.get('/asset-groups', async (req, res) => {
@@ -770,7 +875,7 @@ router.get('/broad-function-heads', async (req, res) => {
     } else if (filter === 'IT_REVIEW') {
       where += " AND bfh.head LIKE '%Reviewer%'";
     } else if (filter === 'BH') {
-      where += " AND bfh.head LIKE '%Business Head%'";
+      where += " AND bfh.head != 'budget_owner'";
     } else if (filter === 'ADMIN') {
       where += " AND (bfh.head LIKE '%Admin%' OR bfh.head LIKE '%Accountant%' OR bfh.head LIKE '%Finance%') AND bfh.head NOT LIKE '%PS_ADMIN%'";
     }
@@ -956,10 +1061,18 @@ router.get('/workflows', async (req, res) => {
 router.post('/workflows', async (req, res) => {
   try {
     const { name, description, request_type, min_amount, max_amount, is_default } = req.body;
+    
+    const finalRequestType = is_default ? 'BOTH' : (request_type || 'BOTH');
+
     const [result] = await db.query(
       "INSERT INTO gcars_workflows (name, description, request_type, min_amount, max_amount, is_default) VALUES (?, ?, ?, ?, ?, ?)",
-      [name, description, request_type || 'BOTH', min_amount || 0, max_amount || 999999999, is_default ? 1 : 0]
+      [name, description, finalRequestType, min_amount || 0, max_amount || 999999999, is_default ? 1 : 0]
     );
+
+    if (is_default) {
+      await db.query("UPDATE users SET default_flow_id = ?", [result.insertId]);
+    }
+
     res.status(201).json({ success: true, message: 'Workflow created', id: result.insertId });
   } catch (err) { res.status(500).json({ success: false, message: 'Server error' }); }
 });
@@ -968,10 +1081,22 @@ router.post('/workflows', async (req, res) => {
 router.put('/workflows/:id', async (req, res) => {
   try {
     const { name, description, request_type, min_amount, max_amount, is_active, is_default } = req.body;
+    
+    // If making it default, force request_type to BOTH to cover CAPEX, OPEX, and BULK
+    const finalRequestType = is_default ? 'BOTH' : request_type;
+    
     await db.query(
       "UPDATE gcars_workflows SET name=?, description=?, request_type=?, min_amount=?, max_amount=?, is_active=?, is_default=? WHERE id=?",
-      [name, description, request_type, min_amount, max_amount, is_active ? 1 : 0, is_default ? 1 : 0, req.params.id]
+      [name, description, finalRequestType, min_amount, max_amount, is_active ? 1 : 0, is_default ? 1 : 0, req.params.id]
     );
+
+    if (is_default) {
+      // Force all users to use this flow
+      await db.query("UPDATE users SET default_flow_id = ?", [req.params.id]);
+      // Ensure all steps in this flow apply to BOTH
+      await db.query("UPDATE gcars_workflow_config SET applies_to = 'BOTH' WHERE flow_id = ?", [req.params.id]);
+    }
+
     res.json({ success: true, message: 'Workflow updated' });
   } catch (err) { res.status(500).json({ success: false, message: 'Server error' }); }
 });
@@ -984,6 +1109,13 @@ router.delete('/workflows/:id', async (req, res) => {
     res.json({ success: true, message: 'Workflow and its steps deleted' });
   } catch (err) { res.status(500).json({ success: false, message: 'Server error' }); }
 });
+
+
+// ═══════════════════════════════════════════════════════════════
+//  SECTION: APPROVAL WORKFLOW (CRUD)
+//  Named workflow templates and their individual step definitions.
+//  Steps define which role/employee approves at each stage.
+// ═══════════════════════════════════════════════════════════════
 
 // GET /api/superadmin/workflow - fetch all workflow steps
 router.get('/workflow', async (req, res) => {
@@ -1273,47 +1405,18 @@ router.delete('/budget-owners/:id', async (req, res) => {
   }
 });
 
-// Redundant CFO Workflow sections removed. Unified logic in the Analytics section.
-
-// PUT /api/superadmin/allocations/:id
-router.put('/allocations/:id', cfoOrAdmin, async (req, res) => {
-  try {
-    const { budgeted_amount, description, status } = req.body;
-    await db.query(
-      `UPDATE capex_allocation SET budgeted_amount = ?, description = ?, status = ?, updated_at = NOW() WHERE id = ?`,
-      [budgeted_amount, description, status, req.params.id]
-    );
-    res.json({ success: true, message: 'Allocation updated' });
-  } catch (err) {
-    res.status(500).json({ success: false, message: 'Server error' });
-  }
-});
-
-// DELETE /api/superadmin/allocations/:id
-router.delete('/allocations/:id', cfoOrAdmin, async (req, res) => {
-  try {
-    await db.query("UPDATE capex_allocation SET status = 'Delete' WHERE id = ?", [req.params.id]);
-    res.json({ success: true, message: 'Allocation deleted' });
-  } catch (err) {
-    res.status(500).json({ success: false, message: 'Server error' });
-  }
-});
-
-// GET /api/superadmin/budget-entities
-router.get('/budget-entities', cfoOrAdmin, async (req, res) => {
-  try {
-    const [rows] = await db.query("SELECT id, entity_name FROM capex_budget_entity WHERE status = 'Active' ORDER BY entity_name");
-    res.json({ success: true, data: rows });
-  } catch (err) {
-    res.status(500).json({ success: false, message: 'Server error' });
-  }
-});
 
 // ─────────────────────────────────────────────────────
 // ROLES & PERMISSIONS
 // ─────────────────────────────────────────────────────
 
-// GET /api/superadmin/roles - list roles with permission counts
+
+// ═══════════════════════════════════════════════════════════════
+//  SECTION: ROLES & PERMISSIONS
+//  Manage system roles and their permission assignments.
+// ═══════════════════════════════════════════════════════════════
+
+// GET /api/superadmin/roles - list all roles with permission counts
 router.get('/roles', async (req, res) => {
   try {
     const [rows] = await db.query(`
@@ -1390,6 +1493,12 @@ router.delete('/roles/:id', async (req, res) => {
 
 
 
+
+// ═══════════════════════════════════════════════════════════════
+//  SECTION: LOCATIONS
+//  CRUD for plant / office location master records.
+// ═══════════════════════════════════════════════════════════════
+
 // GET /api/superadmin/locations
 router.get('/locations', async (req, res) => {
   try {
@@ -1437,6 +1546,12 @@ router.delete('/locations/:id', async (req, res) => {
     res.status(500).json({ success: false, message: 'Server error' });
   }
 });
+
+
+// ═══════════════════════════════════════════════════════════════
+//  SECTION: STRATEGIC BUSINESS UNITS (SBUs)
+//  CRUD for SBU master records.
+// ═══════════════════════════════════════════════════════════════
 
 // GET /api/superadmin/sbus
 router.get('/sbus', async (req, res) => {
@@ -1486,10 +1601,18 @@ router.delete('/sbus/:id', async (req, res) => {
   }
 });
 
-// GET /api/superadmin/employees
+
+// ═══════════════════════════════════════════════════════════════
+//  SECTION: EMPLOYEES
+//  CRUD for the capex_master_employee table.
+//  PUT also updates the linked users.password when a new
+//  password is provided (admin-initiated password reset).
+// ═══════════════════════════════════════════════════════════════
+
+// GET /api/superadmin/employees - paginated employee list with search
 router.get('/employees', async (req, res) => {
   try {
-    const { search = '', page = 1, limit = 50 } = req.query;
+    const { search = '', sbu = '', location = '', b_func = '', page = 1, limit = 50 } = req.query;
     const offset = (page - 1) * limit;
     let where = 'WHERE 1=1';
     const params = [];
@@ -1497,6 +1620,18 @@ router.get('/employees', async (req, res) => {
       where += ' AND (name LIKE ? OR emp_no LIKE ? OR email LIKE ?)';
       const s = `%${search}%`;
       params.push(s, s, s);
+    }
+    if (sbu) {
+      where += ' AND sbu = ?';
+      params.push(sbu);
+    }
+    if (location) {
+      where += ' AND location = ?';
+      params.push(location);
+    }
+    if (b_func) {
+      where += ' AND b_func = ?';
+      params.push(b_func);
     }
     const [rows] = await db.query(
       `SELECT * FROM capex_master_employee ${where} ORDER BY name LIMIT ? OFFSET ?`,
@@ -1517,19 +1652,38 @@ router.post('/employees', async (req, res) => {
       b_func, b_func_id, grade, compcode, plant, territory, costcentre, 
       status = 'Active' 
     } = req.body;
-    await db.query(
-      `INSERT INTO capex_master_employee (
-        emp_no, name, email, sbu, location, desg, rpt_code, rpt_to, 
-        b_func, b_func_id, grade, compcode, plant, territory, costcentre, 
-        status, created_at
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NOW())`,
-      [
-        emp_no, name, email, sbu, location, desg, rpt_code, rpt_to, 
-        b_func, b_func_id, grade, compcode, plant, territory, costcentre, 
-        status
-      ]
-    );
-    res.status(201).json({ success: true, message: 'Employee created' });
+
+    const [existing] = await db.query('SELECT id FROM capex_master_employee WHERE emp_no = ?', [emp_no]);
+
+    if (existing.length > 0) {
+      await db.query(
+        `UPDATE capex_master_employee SET 
+          name = ?, email = ?, sbu = ?, location = ?, desg = ?, rpt_code = ?, rpt_to = ?, 
+          b_func = ?, b_func_id = ?, grade = ?, compcode = ?, plant = ?, territory = ?, costcentre = ?, 
+          status = ?, updated_at = NOW()
+         WHERE emp_no = ?`,
+        [
+          name, email, sbu, location, desg, rpt_code, rpt_to, 
+          b_func, b_func_id, grade, compcode, plant, territory, costcentre, 
+          status, emp_no
+        ]
+      );
+      res.status(200).json({ success: true, message: 'Employee updated successfully' });
+    } else {
+      await db.query(
+        `INSERT INTO capex_master_employee (
+          emp_no, name, email, sbu, location, desg, rpt_code, rpt_to, 
+          b_func, b_func_id, grade, compcode, plant, territory, costcentre, 
+          status, created_at, updated_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NOW(), NOW())`,
+        [
+          emp_no, name, email, sbu, location, desg, rpt_code, rpt_to, 
+          b_func, b_func_id, grade, compcode, plant, territory, costcentre, 
+          status
+        ]
+      );
+      res.status(201).json({ success: true, message: 'Employee created successfully' });
+    }
   } catch (err) {
     console.error(err);
     res.status(500).json({ success: false, message: 'Server error' });
@@ -1541,25 +1695,59 @@ router.put('/employees/:emp_no', async (req, res) => {
   try {
     const { 
       name, email, sbu, location, desg, rpt_code, rpt_to, 
-      b_func, b_func_id, grade, compcode, plant, territory, costcentre, 
+      b_func, grade, compcode, plant, territory, costcentre, 
       status 
     } = req.body;
+
+    let sbu_id = null;
+    if (sbu) {
+      const [sRows] = await db.query('SELECT id FROM capex_master_sbu_master WHERE sbu_name = ?', [sbu]);
+      if (sRows.length) sbu_id = sRows[0].id;
+    }
+
+    let location_id = null;
+    if (location) {
+      const [lRows] = await db.query('SELECT id FROM capex_master_location WHERE location = ?', [location]);
+      if (lRows.length) location_id = lRows[0].id;
+    }
+
+    let b_func_id = req.body.b_func_id || null;
+    if (b_func) {
+      const [bRows] = await db.query('SELECT id FROM capex_master_broad_function WHERE b_func = ?', [b_func]);
+      if (bRows.length) b_func_id = bRows[0].id;
+    }
+
     await db.query(
       `UPDATE capex_master_employee SET 
-        name=?, email=?, sbu=?, location=?, desg=?, rpt_code=?, rpt_to=?, 
+        name=?, email=?, sbu=?, sbu_id=?, location=?, location_id=?, desg=?, rpt_code=?, rpt_to=?, 
         b_func=?, b_func_id=?, grade=?, compcode=?, plant=?, territory=?, costcentre=?, 
         status=?, updated_at=NOW() 
        WHERE emp_no=? OR id=?`,
       [
-        name, email, sbu, location, desg, rpt_code, rpt_to, 
+        name, email, sbu, sbu_id, location, location_id, desg, rpt_code, rpt_to, 
         b_func, b_func_id, grade, compcode, plant, territory, costcentre, 
         status, req.params.emp_no, req.params.emp_no
       ]
     );
+
+    // If password provided, update the linked user account
+    const { password } = req.body;
+    if (password) {
+      const [userRows] = await db.query('SELECT id FROM users WHERE emp_no = ?', [req.params.emp_no]);
+      if (userRows.length) {
+        const hashed = await bcrypt.hash(password, 10);
+        // Also update old_password to support legacy plaintext login as requested
+        await db.query(
+          'UPDATE users SET password = ?, old_password = ?, updated_at = NOW() WHERE emp_no = ?', 
+          [hashed, password, req.params.emp_no]
+        );
+      }
+    }
+
     res.json({ success: true, message: 'Employee updated' });
   } catch (err) {
     console.error(err);
-    res.status(500).json({ success: false, message: 'Server error' });
+    res.status(500).json({ success: false, message: err.message || 'Server error' });
   }
 });
 
@@ -1572,6 +1760,12 @@ router.delete('/employees/:emp_no', async (req, res) => {
     res.status(500).json({ success: false, message: 'Server error' });
   }
 });
+
+
+// ═══════════════════════════════════════════════════════════════
+//  SECTION: BROAD FUNCTIONS (write)
+//  CRUD for broad-function / department master records.
+// ═══════════════════════════════════════════════════════════════
 
 // POST /api/superadmin/broad-functions
 router.post('/broad-functions', async (req, res) => {
@@ -1610,6 +1804,12 @@ router.delete('/broad-functions/:id', async (req, res) => {
     res.status(500).json({ success: false, message: 'Server error' });
   }
 });
+
+
+// ═══════════════════════════════════════════════════════════════
+//  SECTION: ASSET GROUPS (write)
+//  CRUD for asset-group master records.
+// ═══════════════════════════════════════════════════════════════
 
 // POST /api/superadmin/asset-groups
 router.post('/asset-groups', async (req, res) => {
@@ -1758,6 +1958,13 @@ router.put('/accountants/:id', async (req, res) => {
     res.status(500).json({ success: false, message: 'Server error' });
   } finally { connection.release(); }
 });
+
+
+// ═══════════════════════════════════════════════════════════════
+//  SECTION: SINGLE-RECORD LOOKUPS
+//  GET endpoints that return one record by primary key.
+//  Used by form pre-population when editing master data.
+// ═══════════════════════════════════════════════════════════════
 
 // GET /api/superadmin/employees/:emp_no
 router.get('/employees/:emp_no', async (req, res) => {

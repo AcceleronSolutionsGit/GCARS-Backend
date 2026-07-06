@@ -10,7 +10,77 @@ const router = express.Router();
 
 router.use(authMiddleware);
 
-async function getWorkflowChain(sbu, requestType, amount, userId) {
+async function checkQuarterlyBudget(allocation_id, requestedAmount) {
+  const [allocRows] = await db.query(
+    `SELECT ca.*, at2.asset_group, at2.asset_name
+     FROM capex_allocation ca
+     LEFT JOIN capex_master_asset_type at2 ON at2.id = ca.asset_type
+     WHERE ca.id = ?`,
+    [allocation_id]
+  );
+
+  if (!allocRows.length) return { allowed: false, message: 'Allocation not found' };
+
+  const allocation = allocRows[0];
+  const { budgeted_amount, committed_amount, budget_amount_consumed } = allocation;
+  let available = Number(budgeted_amount) - Number(committed_amount) - Number(budget_amount_consumed);
+
+  const currentYear = new Date().getFullYear();
+  const qMonth = new Date().getMonth();
+  const currentQ = `Q${Math.floor(qMonth / 3) + 1}`;
+  
+  const isIT = allocation.asset_group === 1 && !(allocation.asset_name || '').toLowerCase().includes('tool');
+  const category = isIT ? 'IT' : 'Tools';
+  const assetCondition = category === 'IT' ? 'at2.asset_group = 1 AND LOWER(at2.asset_name) NOT LIKE "%tool%"' : 'LOWER(at2.asset_name) LIKE "%tool%"';
+
+  const [qbRows] = await db.query('SELECT allow_overflow FROM capex_quarterly_budget WHERE year = ? AND quarter = ? AND category = ?', [currentYear, currentQ, category]);
+  const allowOverflow = qbRows.length > 0 ? (qbRows[0].allow_overflow === 1) : true;
+
+  if (!allowOverflow) {
+    const [sumQbRows] = await db.query('SELECT SUM(amount) as total_q FROM capex_quarterly_budget WHERE year = ? AND category = ? AND quarter <= ?', [currentYear, category, currentQ]);
+    const cumulativeGlobalAmount = sumQbRows[0]?.total_q || 0;
+
+    if (category === 'IT') {
+      const [itConsRows] = await db.query(`
+        SELECT SUM(ca.committed_amount + ca.budget_amount_consumed) as total_consumed
+        FROM capex_allocation ca
+        JOIN capex_master_asset_type at2 ON at2.id = ca.asset_type
+        WHERE ca.year = ? AND ca.status = 'Active' AND (${assetCondition})
+      `, [currentYear]);
+      const totalITConsumed = itConsRows[0]?.total_consumed || 0;
+      
+      const qAvailable = cumulativeGlobalAmount - totalITConsumed;
+      if (qAvailable < available) {
+        available = qAvailable;
+      }
+    } else {
+      const [totalRows] = await db.query(`
+        SELECT SUM(ca.budgeted_amount) as total_allocated
+        FROM capex_allocation ca
+        JOIN capex_master_asset_type at2 ON at2.id = ca.asset_type
+        WHERE ca.year = ? AND ca.status = 'Active' AND (${assetCondition})
+      `, [currentYear]);
+      
+      const totalAllocated = totalRows[0]?.total_allocated || 0;
+      if (totalAllocated > 0) {
+        const ratio = Number(budgeted_amount) / Number(totalAllocated);
+        const cumulativeLimit = ratio * cumulativeGlobalAmount;
+        const qAvailable = cumulativeLimit - Number(committed_amount) - Number(budget_amount_consumed);
+        
+        if (qAvailable < available) {
+          available = qAvailable;
+        }
+      }
+    }
+  }
+
+  if (Number(requestedAmount) > available) {
+    return { allowed: false, message: 'Request amount exceeds available Quarterly Budget constraint.' };
+  }
+  return { allowed: true };
+}
+
+async function getWorkflowChain(sbu, requestType, amount, userId, isITAsset = true) {
   let flowId = null;
 
   // 1. Check if user has a set default flow strategy
@@ -46,7 +116,10 @@ async function getWorkflowChain(sbu, requestType, amount, userId) {
       [flowId || 1, requestType || 'CAPEX']
     );
   }
-  return steps.filter(s => Number(amount) >= Number(s.amount_min) && Number(amount) <= Number(s.amount_max));
+  return steps.filter(s => {
+    if (s.role_key === 'it_admin' && !isITAsset) return false;
+    return Number(amount) >= Number(s.amount_min) && Number(amount) <= Number(s.amount_max);
+  });
 }
 
 /**
@@ -62,6 +135,7 @@ async function determineSpecificApprover(requestId, roleKey) {
            COALESCE(me.b_func, 'All') as requester_bfun, 
            me.b_func_id as requester_bfun_id, 
            me.sbu_id,
+           me.location_id,
            COALESCE(me.rpt_code, NULL) as supervisor, 
            at.asset_group as group_id, ag.name as group_name
     FROM capex_request cr
@@ -75,10 +149,6 @@ async function determineSpecificApprover(requestId, roleKey) {
   const request = reqs[0];
 
   if (roleKey === 'supervisor') {
-    if (request.requester_bfun && request.requester_bfun.toLowerCase().includes('product support')) {
-       const [psRows] = await db.query("SELECT emp_no FROM capex_master_broad_function_head WHERE LOWER(head) LIKE '%product support head%' OR LOWER(head) = 'ps_admin' LIMIT 1");
-       if (psRows.length > 0) return psRows[0].emp_no;
-    }
     return request.supervisor;
   }
 
@@ -178,6 +248,23 @@ async function determineSpecificApprover(requestId, roleKey) {
   }
 
   if (roleKey === 'accountant') {
+    const sbuId = request.sbu_id || request.requester_sbu_id;
+    const locId = request.location_id || request.target_location || '';
+    
+    if (sbuId) {
+      const [accRows] = await db.query(`
+        SELECT employee_no FROM capex_accountant 
+        WHERE (sbu = 'All' OR FIND_IN_SET(?, sbu))
+          AND (location_id = 'All' OR FIND_IN_SET(?, location_id))
+          AND status = 'Active'
+        ORDER BY (location_id != 'All') DESC, (sbu != 'All') DESC
+        LIMIT 1
+      `, [sbuId, locId]);
+      
+      if (accRows.length > 0) return accRows[0].employee_no;
+    }
+
+    // Fallback if not found in matrix
     const [aRows] = await db.query("SELECT emp_no FROM users WHERE user_type = 'accountant' AND status = 'Active' LIMIT 1");
     return aRows[0]?.emp_no || null;
   }
@@ -247,7 +334,7 @@ router.get('/', async (req, res) => {
     );
 
     const [tRows] = await db.query(
-      `SELECT COUNT(*) as total FROM capex_request cr
+      `SELECT COUNT(DISTINCT cr.id) as total FROM capex_request cr
        LEFT JOIN capex_master_employee me ON me.emp_no = cr.emp_no
        ${where}`,
       params
@@ -293,7 +380,18 @@ const storage = multer.diskStorage({
     cb(null, 'DOC-' + uniqueSuffix + '-' + file.originalname.replace(/\s+/g, '_'));
   }
 });
-const upload = multer({ storage: storage, limits: { fileSize: 10 * 1024 * 1024 } }); // 10MB limit
+const upload = multer({ 
+  storage: storage, 
+  limits: { fileSize: 10 * 1024 * 1024 }, // 10MB limit
+  fileFilter: (req, file, cb) => {
+    const ext = path.extname(file.originalname).toLowerCase();
+    const blockedExts = ['.exe', '.sh', '.bat', '.php', '.js', '.bin', '.cmd'];
+    if (blockedExts.includes(ext)) {
+      return cb(new Error('Invalid file type uploaded. Executables are not allowed.'));
+    }
+    cb(null, true);
+  }
+});
 
 // ...
 
@@ -323,27 +421,46 @@ router.get('/:id', async (req, res) => {
     if (!rows.length) return res.status(404).json({ success: false, message: 'Request not found' });
     const request = rows[0];
 
+    const isAdmin = ['admin', 'superadmin'].includes(req.user.user_type) || req.user.roles?.some(r => ['admin', 'superadmin'].includes(r));
+    const isOwner = request.emp_no === req.user.emp_no;
+    const isApprover = request.active_approver_emp_no === req.user.emp_no;
+    const [trackRows] = await db.query('SELECT id FROM capex_request_track WHERE capex_request_id = ? AND emp_no = ? LIMIT 1', [request.id, req.user.emp_no]);
+    const inTrack = trackRows.length > 0;
+    
+    if (!isAdmin && !isOwner && !isApprover && !inTrack) {
+       return res.status(403).json({ success: false, message: 'Forbidden: You do not have access to this request' });
+    }
+
     const [rawTrack] = await db.query(
       'SELECT * FROM capex_request_track WHERE capex_request_id = ? ORDER BY created_at ASC',
       [req.params.id]
     );
 
     const track = await Promise.all(rawTrack.map(async (t) => {
-       if (t.comment) {
-          const match = t.comment.match(/(?:by|Rejected by) (\d+) (?:at|at level|level)/);
-          if (match) {
-             const empNo = match[1];
-             const [nms] = await db.query("SELECT name FROM capex_master_employee WHERE emp_no = ?", [empNo]);
-             if (nms.length > 0) {
-                return { ...t, comment: t.comment.replace(empNo, nms[0].name) };
-             }
-          }
-       }
-       return t;
+      let actor_name = 'System';
+      if (t.emp_no) {
+        const [actorRows] = await db.query("SELECT name FROM capex_master_employee WHERE emp_no = ?", [t.emp_no]);
+        if (actorRows.length > 0) actor_name = actorRows[0].name;
+      }
+      
+      let processedComment = t.comment;
+      if (t.comment) {
+        const match = t.comment.match(/(?:by|Rejected by) (\d+) (?:at|at level|level)/);
+        if (match) {
+           const empNo = match[1];
+           const [nms] = await db.query("SELECT name FROM capex_master_employee WHERE emp_no = ?", [empNo]);
+           if (nms.length > 0) {
+              processedComment = t.comment.replace(empNo, nms[0].name);
+           }
+        }
+      }
+      return { ...t, actor_name, comment: processedComment };
     }));
 
     const reqSbu = (request.request_type === 'BULK' && request.target_sbu) ? request.target_sbu : request.sbu;
-    const chain = await getWorkflowChain(reqSbu, request.request_type, request.amount_ext_gst || 0, request.requester_id);
+      const assetGroupName = (request.asset_group_name || '').toUpperCase();
+      const isITAsset = request.asset_group_id === 1 || (assetGroupName.includes('IT') && !assetGroupName.includes('NON IT'));
+    const chain = await getWorkflowChain(reqSbu, request.request_type, request.amount_ext_gst || 0, request.requester_id, isITAsset);
 
     const ROLE_NAMES = {
       'supervisor': 'Direct Supervisor',
@@ -475,6 +592,26 @@ router.post('/', upload.array('attachments', 10), async (req, res) => {
 
     let final_budget_allocation_id = budget_allocation_id;
 
+    if (!asset_name || !asset_type || !expected_date || !procurement || amount_ext_gst === undefined) {
+      return res.status(400).json({ success: false, message: 'Required fields are missing' });
+    }
+
+    const qCheck = await checkQuarterlyBudget(final_budget_allocation_id, amount_ext_gst);
+    if (!qCheck.allowed) {
+      return res.status(400).json({ success: false, message: qCheck.message });
+    }
+
+    const amountVal = Number(amount_ext_gst);
+    if (isNaN(amountVal) || amountVal <= 0) {
+      return res.status(400).json({ success: false, message: 'Amount must be greater than 0' });
+    }
+    const expDate = new Date(expected_date);
+    const maxDate = new Date();
+    maxDate.setFullYear(maxDate.getFullYear() + 5);
+    if (isNaN(expDate.getTime()) || expDate > maxDate) {
+      return res.status(400).json({ success: false, message: 'Invalid expected date' });
+    }
+
     const [empRows] = await db.query('SELECT sbu_id, b_func_id, location_id FROM capex_master_employee WHERE emp_no = ?', [req.user.emp_no]);
     if (empRows.length > 0) {
       const { sbu_id, b_func_id, location_id } = empRows[0];
@@ -531,7 +668,11 @@ router.post('/', upload.array('attachments', 10), async (req, res) => {
 
     // Workflow logic
     const reqSbu = (request_type === 'BULK' && sbu) ? sbu : employee.sbu;
-    const chain = await getWorkflowChain(reqSbu, request_type || 'CAPEX', amount_ext_gst || 0, req.user.id);
+    const [atRows] = await db.query('SELECT asset_group FROM capex_master_asset_type WHERE id = ?', [asset_type]);
+    const [agRows] = await db.query('SELECT name FROM capex_master_asset_group WHERE id = ?', [atRows[0]?.asset_group]);
+      const assetGroupName = (agRows[0]?.name || '').toUpperCase();
+      const isITAsset = atRows[0]?.asset_group === 1 || (assetGroupName.includes('IT') && !assetGroupName.includes('NON IT'));
+    const chain = await getWorkflowChain(reqSbu, request_type || 'CAPEX', amount_ext_gst || 0, req.user.id, isITAsset);
     const firstRole = chain.length > 0 ? chain[0].role_key : 'Approved';
 
     const [result] = await db.query(
@@ -596,6 +737,10 @@ router.post('/', upload.array('attachments', 10), async (req, res) => {
       }
     }
 
+    if (final_budget_allocation_id) {
+       await db.query('UPDATE capex_allocation SET committed_amount = committed_amount + ? WHERE id = ?', [amountVal, final_budget_allocation_id]);
+    }
+
     // Log track
     await db.query(
       "INSERT INTO capex_request_track (capex_request_id, emp_no, status, comment, created_at, updated_at) VALUES (?, ?, 'Initiated', 'Request created', NOW(), NOW())",
@@ -627,27 +772,49 @@ router.post('/', upload.array('attachments', 10), async (req, res) => {
 
 // POST /api/requests/:id/approve - approve a request
 router.post('/:id/approve', async (req, res) => {
+  const connection = await db.getConnection();
+  await connection.beginTransaction();
   try {
     const { comment = '' } = req.body;
-    const [rows] = await db.query('SELECT * FROM capex_request WHERE id = ?', [req.params.id]);
-    if (!rows.length) return res.status(404).json({ success: false, message: 'Not found' });
+    const [rows] = await connection.query('SELECT * FROM capex_request WHERE id = ? FOR UPDATE', [req.params.id]);
+    if (!rows.length) {
+       await connection.rollback();
+       connection.release();
+       return res.status(404).json({ success: false, message: 'Not found' });
+    }
 
     const request = rows[0];
+
+    // BUG-03: Terminal state guard
+    if (request.status === 'Approved' || request.status === 'Rejected') {
+       await connection.rollback();
+       connection.release();
+       return res.status(400).json({ success: false, message: 'Request is already finalized' });
+    }
+
+    // BUG-03: Turn order guard
+    const isAdmin = ['admin', 'superadmin'].includes(req.user.user_type) || req.user.roles?.some(r => ['admin', 'superadmin'].includes(r));
+    if (request.active_approver_emp_no && String(request.active_approver_emp_no) !== String(req.user.emp_no) && !isAdmin) {
+       await connection.rollback();
+       connection.release();
+       return res.status(403).json({ success: false, message: 'You are not the designated approver for this step' });
+    }
+
     const approveLevel = request.active_approver;
     const now = new Date();
-
-      const [uRows] = await db.query('SELECT id FROM users WHERE emp_no = ?', [request.emp_no]);
-      const requester = uRows[0];
-    const chain = await getWorkflowChain(request.sbu || '', request.request_type, request.amount_ext_gst || 0, requester?.id);
-    const currentIndex = chain.findIndex(c => c.role_key === approveLevel);
-    let nextStep = currentIndex >= 0 && currentIndex < chain.length - 1 ? chain[currentIndex + 1] : null;
-    let nextLevel = nextStep ? nextStep.role_key : 'Approved';
 
     const [atRows] = await db.query('SELECT asset_group, asset_name FROM capex_master_asset_type WHERE id = ?', [request.asset_type]);
     const assetTypeRow = atRows[0] || {};
     const [agRows] = await db.query('SELECT name FROM capex_master_asset_group WHERE id = ?', [assetTypeRow.asset_group]);
-    const assetGroupName = agRows[0]?.name || '';
-    const isITAsset = assetTypeRow.asset_group === 1 || assetGroupName.toUpperCase().includes('IT');
+      const assetGroupName = (agRows[0]?.name || '').toUpperCase();
+      const isITAsset = assetTypeRow.asset_group === 1 || (assetGroupName.includes('IT') && !assetGroupName.includes('NON IT'));
+
+      const [uRows] = await db.query('SELECT id FROM users WHERE emp_no = ?', [request.emp_no]);
+      const requester = uRows[0];
+    const chain = await getWorkflowChain(request.sbu || '', request.request_type, request.amount_ext_gst || 0, requester?.id, isITAsset);
+    const currentIndex = chain.findIndex(c => c.role_key === approveLevel);
+    let nextStep = currentIndex >= 0 && currentIndex < chain.length - 1 ? chain[currentIndex + 1] : null;
+    let nextLevel = nextStep ? nextStep.role_key : 'Approved';
 
     if (isITAsset && approveLevel === 'budget_owner') {
        if (req.body.forwardToLeadership) {
@@ -708,10 +875,15 @@ router.post('/:id/approve', async (req, res) => {
     updateParams.push(isFinal ? 'Approved' : 'Pending', isFinal ? 'Final' : nextLevel, nextEmpNo);
     updateParams.push(req.params.id);
 
-    await db.query(`UPDATE capex_request SET ${updateFields.join(', ')} WHERE id = ?`, updateParams);
+    await connection.query(`UPDATE capex_request SET ${updateFields.join(', ')} WHERE id = ?`, updateParams);
+
+    // BUG-05: Budget consumption
+    if (approveLevel === 'finance' && request.budget_allocation_id) {
+       await connection.query('UPDATE capex_allocation SET committed_amount = GREATEST(committed_amount - ?, 0), budget_amount_consumed = budget_amount_consumed + ? WHERE id = ?', [request.amount_ext_gst, request.amount_ext_gst, request.budget_allocation_id]);
+    }
 
     // Log track
-    await db.query(
+    await connection.query(
       `INSERT INTO capex_request_track (capex_request_id, emp_no, status, comment, created_at, updated_at) VALUES (?, ?, 'Approved', ?, NOW(), NOW())`,
       [req.params.id, req.user.emp_no, `Approved by ${req.user.username} at level ${approveLevel}. ${comment}`]
     );
@@ -754,28 +926,65 @@ router.post('/:id/approve', async (req, res) => {
        }
     }
 
+    await connection.commit();
+    connection.release();
     res.json({ success: true, message: 'Request approved' });
   } catch (err) {
     console.error(err);
+    if (connection) {
+       await connection.rollback();
+       connection.release();
+    }
     res.status(500).json({ success: false, message: 'Server error' });
   }
 });
 
 // POST /api/requests/:id/reject - reject a request
 router.post('/:id/reject', async (req, res) => {
+  const connection = await db.getConnection();
+  await connection.beginTransaction();
   try {
     const { comment = '' } = req.body;
-    if (!comment) return res.status(400).json({ success: false, message: 'Rejection comment required' });
+    if (!comment) {
+       await connection.rollback();
+       connection.release();
+       return res.status(400).json({ success: false, message: 'Rejection comment required' });
+    }
 
-    const [rows] = await db.query('SELECT capex_no, emp_no FROM capex_request WHERE id = ?', [req.params.id]);
+    const [rows] = await connection.query('SELECT capex_no, emp_no, status, active_approver_emp_no, budget_allocation_id, amount_ext_gst FROM capex_request WHERE id = ? FOR UPDATE', [req.params.id]);
+    if (!rows.length) {
+       await connection.rollback();
+       connection.release();
+       return res.status(404).json({ success: false, message: 'Not found' });
+    }
     const request = rows[0];
 
-    await db.query(
+    // BUG-03: Terminal state guard
+    if (request.status === 'Approved' || request.status === 'Rejected') {
+       await connection.rollback();
+       connection.release();
+       return res.status(400).json({ success: false, message: 'Request is already finalized' });
+    }
+
+    // BUG-03: Turn order guard
+    const isAdmin = ['admin', 'superadmin'].includes(req.user.user_type) || req.user.roles?.some(r => ['admin', 'superadmin'].includes(r));
+    if (request.active_approver_emp_no && String(request.active_approver_emp_no) !== String(req.user.emp_no) && !isAdmin) {
+       await connection.rollback();
+       connection.release();
+       return res.status(403).json({ success: false, message: 'You are not the designated approver for this step' });
+    }
+
+    await connection.query(
       `UPDATE capex_request SET status = 'Rejected', failed_txt = ?, rejecter_emp_no = ?, updated_at = NOW() WHERE id = ?`,
       [comment, req.user.emp_no, req.params.id]
     );
 
-    await db.query(
+    // BUG-05: Budget reversal
+    if (request.budget_allocation_id) {
+       await connection.query('UPDATE capex_allocation SET committed_amount = GREATEST(committed_amount - ?, 0) WHERE id = ?', [request.amount_ext_gst, request.budget_allocation_id]);
+    }
+
+    await connection.query(
       `INSERT INTO capex_request_track (capex_request_id, emp_no, status, comment, created_at, updated_at) VALUES (?, ?, 'Rejected', ?, NOW(), NOW())`,
       [req.params.id, req.user.emp_no, `Rejected by ${req.user.username}: ${comment}`]
     );
@@ -790,9 +999,15 @@ router.post('/:id/reject', async (req, res) => {
       } catch (err) { console.error('Email Trigger Error:', err); }
     }
 
+    await connection.commit();
+    connection.release();
     res.json({ success: true, message: 'Request rejected' });
   } catch (err) {
     console.error(err);
+    if (connection) {
+       await connection.rollback();
+       connection.release();
+    }
     res.status(500).json({ success: false, message: 'Server error' });
   }
 });
@@ -830,9 +1045,15 @@ router.post('/bulk-approve', async (req, res) => {
       const approveLevel = request.active_approver;
       const now = new Date();
 
+      const [atRows] = await db.query('SELECT asset_group, asset_name FROM capex_master_asset_type WHERE id = ?', [request.asset_type]);
+      const assetTypeRow = atRows[0] || {};
+      const [agRows] = await db.query('SELECT name FROM capex_master_asset_group WHERE id = ?', [assetTypeRow.asset_group]);
+      const assetGroupName = (agRows[0]?.name || '').toUpperCase();
+      const isITAsset = assetTypeRow.asset_group === 1 || (assetGroupName.includes('IT') && !assetGroupName.includes('NON IT'));
+
       const [eRows] = await db.query('SELECT sbu, id FROM users WHERE emp_no = ?', [request.emp_no]);
       const employee = eRows[0];
-      const chain = await getWorkflowChain(employee?.sbu || 'All', request.request_type, request.amount_ext_gst || 0, employee?.id);
+      const chain = await getWorkflowChain(employee?.sbu || 'All', request.request_type, request.amount_ext_gst || 0, employee?.id, isITAsset);
       const currentIndex = chain.findIndex(c => c.role_key === approveLevel);
       const nextStep = currentIndex >= 0 && currentIndex < chain.length - 1 ? chain[currentIndex + 1] : null;
       const nextLevel = nextStep ? nextStep.role_key : 'Approved';
