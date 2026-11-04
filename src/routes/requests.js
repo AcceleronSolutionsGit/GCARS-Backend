@@ -317,18 +317,16 @@ router.get('/', async (req, res) => {
     if (status) { where += ' AND cr.status = ?'; params.push(status); }
     if (type) { where += ' AND cr.request_type = ?'; params.push(type); }
     if (search) {
-      where += ' AND (cr.capex_no LIKE ? OR cr.asset_name LIKE ? OR me.name LIKE ?)';
+      where += ' AND (cr.capex_no LIKE ? OR cr.asset_name LIKE ? OR cr.emp_no IN (SELECT emp_no FROM capex_master_employee WHERE name LIKE ?))';
       params.push(`%${search}%`, `%${search}%`, `%${search}%`);
     }
 
     const [rows] = await db.query(
-      `SELECT cr.*, me.name as requester_name, me.sbu, me.location,
+      `SELECT cr.*, 
+              COALESCE(cr.amount_ext_gst, cr.approve_amount, cr.actual_cost, 0) as amount_ext_gst,
               ag.name as asset_group_name, at2.asset_name as asset_type_display,
-              bt.budget_type as budget_type_name,
-              ame.name as active_approver_name
+              bt.budget_type as budget_type_name
        FROM capex_request cr
-       LEFT JOIN (SELECT emp_no, MAX(name) as name, MAX(sbu) as sbu, MAX(location) as location FROM capex_master_employee GROUP BY emp_no) me ON me.emp_no = cr.emp_no
-       LEFT JOIN (SELECT emp_no, MAX(name) as name FROM capex_master_employee GROUP BY emp_no) ame ON ame.emp_no = cr.active_approver_emp_no
        LEFT JOIN capex_master_asset_type at2 ON at2.id = cr.asset_type
        LEFT JOIN capex_master_asset_group ag ON ag.id = at2.asset_group
        LEFT JOIN capex_budget_type bt ON bt.id = cr.budget_type
@@ -339,12 +337,23 @@ router.get('/', async (req, res) => {
     );
 
     const [tRows] = await db.query(
-      `SELECT COUNT(DISTINCT cr.id) as total FROM capex_request cr
-       LEFT JOIN (SELECT emp_no, MAX(name) as name FROM capex_master_employee GROUP BY emp_no) me ON me.emp_no = cr.emp_no
-       ${where}`,
+      `SELECT COUNT(*) as total FROM capex_request cr ${where}`,
       params
     );
     const total = tRows[0]?.total || 0;
+
+    // Fast batch hydration of employee names for just the returned page (e.g. 25 rows)
+    const empNos = [...new Set(rows.flatMap(r => [r.emp_no, r.active_approver_emp_no]).filter(Boolean))];
+    const empMap = {};
+    if (empNos.length > 0) {
+      const [emps] = await db.query(
+        `SELECT emp_no, name, sbu, location FROM capex_master_employee WHERE emp_no IN (?) ORDER BY id DESC`,
+        [empNos]
+      );
+      emps.forEach(e => {
+        if (!empMap[e.emp_no]) empMap[e.emp_no] = e;
+      });
+    }
 
     const ROLE_NAMES = {
       'supervisor': 'Direct Supervisor',
@@ -361,6 +370,10 @@ router.get('/', async (req, res) => {
 
     const augmentedRows = rows.map(r => ({
       ...r,
+      requester_name: empMap[r.emp_no]?.name || r.emp_no || '',
+      sbu: empMap[r.emp_no]?.sbu || '',
+      location: empMap[r.emp_no]?.location || '',
+      active_approver_name: empMap[r.active_approver_emp_no]?.name || r.active_approver_emp_no || '',
       active_approver_friendly: ROLE_NAMES[r.active_approver] || r.active_approver
     }));
 

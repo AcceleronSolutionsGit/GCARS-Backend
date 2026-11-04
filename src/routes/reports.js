@@ -66,11 +66,11 @@ router.get('/dashboard-summary', async (req, res) => {
         SUM(CASE WHEN cr.status IN ('Approved', 'COMPLETE', 'PO CREATED', 'SANCTION NUMBER GENERATED', 'ASSET CREATED') THEN 1 ELSE 0 END) as approved,
         SUM(CASE WHEN cr.status IN ('Pending', 'Initiated', 'IN PROGRESS', 'IN STOCK') THEN 1 ELSE 0 END) as pending,
         SUM(CASE WHEN cr.status IN ('Rejected', 'REJECT', 'FAIL') THEN 1 ELSE 0 END) as rejected,
-        SUM(CASE WHEN cr.request_type = 'CAPEX' THEN 1 ELSE 0 END) as capex_count,
-        SUM(CASE WHEN cr.request_type = 'OPEX'  THEN 1 ELSE 0 END) as opex_count,
-        COALESCE(SUM(cr.amount_ext_gst), 0) as total_amount,
+        SUM(CASE WHEN cr.budget_type IN (1, 2) OR cr.request_type = 'CAPEX' THEN 1 ELSE 0 END) as capex_count,
+        SUM(CASE WHEN cr.budget_type = 3 OR cr.request_type = 'OPEX' THEN 1 ELSE 0 END) as opex_count,
+        COALESCE(SUM(COALESCE(cr.amount_ext_gst, cr.approve_amount, cr.actual_cost, 0)), 0) as total_amount,
         COALESCE(SUM(CASE WHEN cr.status IN ('Approved', 'COMPLETE', 'PO CREATED', 'SANCTION NUMBER GENERATED', 'ASSET CREATED')
-                          THEN cr.amount_ext_gst ELSE 0 END), 0) as approved_amount
+                          THEN COALESCE(cr.amount_ext_gst, cr.approve_amount, cr.actual_cost, 0) ELSE 0 END), 0) as approved_amount
        FROM capex_request cr WHERE YEAR(cr.created_at) = ?${userFilter}`,
       userParams
     );
@@ -79,7 +79,7 @@ router.get('/dashboard-summary', async (req, res) => {
     // ── Monthly trend (for charting) ──────────────────────────
     const [monthly] = await db.query(
       `SELECT MONTH(cr.created_at) as month, MONTHNAME(cr.created_at) as month_name,
-              COUNT(*) as count, COALESCE(SUM(cr.amount_ext_gst), 0) as amount
+              COUNT(*) as count, COALESCE(SUM(COALESCE(cr.amount_ext_gst, cr.approve_amount, cr.actual_cost, 0)), 0) as amount
        FROM capex_request cr WHERE YEAR(cr.created_at) = ?${userFilter}
        GROUP BY MONTH(cr.created_at) ORDER BY MONTH(cr.created_at)`,
       userParams
@@ -105,7 +105,7 @@ router.get('/dashboard-summary', async (req, res) => {
     let bySbu = [];
     if (isAdmin) {
       const [sbuRows] = await db.query(
-        `SELECT me.sbu, COUNT(*) as count, COALESCE(SUM(cr.amount_ext_gst), 0) as amount
+        `SELECT me.sbu, COUNT(*) as count, COALESCE(SUM(COALESCE(cr.amount_ext_gst, cr.approve_amount, cr.actual_cost, 0)), 0) as amount
          FROM capex_request cr
          LEFT JOIN capex_master_employee me ON me.emp_no = cr.emp_no
          WHERE YEAR(cr.created_at) = ?
