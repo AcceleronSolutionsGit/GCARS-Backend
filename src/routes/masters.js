@@ -264,8 +264,9 @@ router.get('/allocations', async (req, res) => {
       target_sbu, target_location,
     } = req.query;
 
-    const isAdmin = ['admin', 'superadmin'].includes(req.user.user_type) ||
-                    req.user.roles?.some(r => ['admin', 'superadmin'].includes(r));
+    const ADMIN_ROLES = ['admin', 'superadmin', 'super_admin'];
+    const isAdmin = ADMIN_ROLES.includes(req.user.user_type) ||
+                    req.user.roles?.some(r => ADMIN_ROLES.includes(r));
 
     let q = `SELECT ca.*, be.entity_name, ag.name as asset_group_name,
                     at2.asset_name, bt.budget_type as budget_type_name

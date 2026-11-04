@@ -50,8 +50,9 @@ router.get('/dashboard-summary', async (req, res) => {
     const { year = new Date().getFullYear() } = req.query;
 
     // Determine if the caller has admin-level access
-    const isAdmin = ['admin', 'superadmin'].includes(req.user?.user_type) ||
-                    req.user?.roles?.some(r => ['admin', 'superadmin'].includes(r));
+    const ADMIN_ROLES = ['admin', 'superadmin', 'super_admin'];
+    const isAdmin = ADMIN_ROLES.includes(req.user?.user_type) ||
+                    req.user?.roles?.some(r => ADMIN_ROLES.includes(r));
     const empNo   = req.user?.emp_no;
 
     // Non-admin users are scoped to their own requests only
@@ -140,8 +141,9 @@ router.get('/all-requests', async (req, res) => {
   try {
     const { status, year, sbu, request_type, search = '' } = req.query;
 
-    const isAdmin = ['admin', 'superadmin'].includes(req.user?.user_type) ||
-                    req.user?.roles?.some(r => ['admin', 'superadmin'].includes(r));
+    const ADMIN_ROLES = ['admin', 'superadmin', 'super_admin'];
+    const isAdmin = ADMIN_ROLES.includes(req.user?.user_type) ||
+                    req.user?.roles?.some(r => ADMIN_ROLES.includes(r));
 
     let where  = 'WHERE 1=1';
     const params = [];
@@ -151,7 +153,7 @@ router.get('/all-requests', async (req, res) => {
       where += ` AND (
         cr.emp_no = ?
         OR cr.active_approver_emp_no = ?
-        OR EXISTS (SELECT 1 FROM capex_request_track WHERE capex_request_id = cr.id AND emp_no = ?)
+        OR EXISTS (SELECT 1 FROM capex_request_track crt WHERE crt.capex_request_id = cr.id AND crt.emp_no = ?)
       )`;
       params.push(req.user.emp_no, req.user.emp_no, req.user.emp_no);
     }

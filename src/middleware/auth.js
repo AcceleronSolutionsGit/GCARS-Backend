@@ -55,9 +55,10 @@ const authMiddleware = (req, res, next) => {
  * @param {import('express').NextFunction} next
  */
 const superAdminOnly = (req, res, next) => {
+  const SA_ROLES = ['superadmin', 'super_admin'];
   const isSA =
-    req.user?.user_type === 'superadmin' ||
-    req.user?.roles?.includes('superadmin');
+    SA_ROLES.includes(req.user?.user_type) ||
+    req.user?.roles?.some(r => SA_ROLES.includes(r));
 
   if (!isSA) {
     return res.status(403).json({ success: false, message: 'Super admin access required' });
@@ -76,7 +77,7 @@ const superAdminOnly = (req, res, next) => {
  * @param {import('express').NextFunction} next
  */
 const adminOrSuperAdmin = (req, res, next) => {
-  const ADMIN_TYPES = ['admin', 'superadmin'];
+  const ADMIN_TYPES = ['admin', 'superadmin', 'super_admin'];
   const isAdmin =
     ADMIN_TYPES.includes(req.user?.user_type) ||
     req.user?.roles?.some(r => ADMIN_TYPES.includes(r));
@@ -99,7 +100,7 @@ const adminOrSuperAdmin = (req, res, next) => {
  * @param {import('express').NextFunction} next
  */
 const cfoOrAdmin = (req, res, next) => {
-  const ADMIN_TYPES  = ['admin', 'superadmin'];
+  const ADMIN_TYPES  = ['admin', 'superadmin', 'super_admin'];
   const isCFO        = req.user?.roles?.includes('cfo');
   const isAdmin      = ADMIN_TYPES.includes(req.user?.user_type) ||
                        req.user?.roles?.some(r => ADMIN_TYPES.includes(r));

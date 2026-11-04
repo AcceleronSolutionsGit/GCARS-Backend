@@ -285,7 +285,8 @@ router.get('/', async (req, res) => {
   try {
     const { status, type, page = 1, limit = 20, search = '', view } = req.query;
     const offset = (page - 1) * limit;
-    const isAdmin = ['admin', 'superadmin'].includes(req.user.user_type) || req.user.roles?.some(r => ['admin', 'superadmin'].includes(r));
+    const adminRoles = ['admin', 'superadmin', 'super_admin'];
+    const isAdmin = adminRoles.includes(req.user.user_type) || req.user.roles?.some(r => adminRoles.includes(r));
 
     let where = 'WHERE 1=1';
     const params = [];
@@ -299,7 +300,7 @@ router.get('/', async (req, res) => {
       where += ` AND (cr.active_approver_emp_no = ? OR cr.active_approver IN (?)) AND cr.status IN ('Pending', 'Initiated')`;
       params.push(req.user.emp_no, userRoles);
     } else if (view === 'history') {
-      where += ` AND EXISTS (SELECT 1 FROM capex_request_track WHERE capex_request_id = cr.id AND emp_no = ? AND status != 'Initiated')`;
+      where += ` AND EXISTS (SELECT 1 FROM capex_request_track crt WHERE crt.capex_request_id = cr.id AND crt.emp_no = ? AND crt.status != 'Initiated')`;
       params.push(req.user.emp_no);
     } else if (!isAdmin) {
       // Default for regular user: combination of all
@@ -308,7 +309,7 @@ router.get('/', async (req, res) => {
         cr.emp_no = ? 
         OR cr.active_approver_emp_no = ? 
         OR cr.active_approver IN (?)
-        OR EXISTS (SELECT 1 FROM capex_request_track WHERE capex_request_id = cr.id AND emp_no = ?)
+        OR EXISTS (SELECT 1 FROM capex_request_track crt WHERE crt.capex_request_id = cr.id AND crt.emp_no = ?)
       )`;
       params.push(req.user.emp_no, req.user.emp_no, userRoles, req.user.emp_no);
     }
@@ -425,7 +426,7 @@ router.get('/:id', async (req, res) => {
     if (!rows.length) return res.status(404).json({ success: false, message: 'Request not found' });
     const request = rows[0];
 
-    const isAdmin = ['admin', 'superadmin'].includes(req.user.user_type) || req.user.roles?.some(r => ['admin', 'superadmin'].includes(r));
+    const isAdmin = ['admin', 'superadmin', 'super_admin'].includes(req.user.user_type) || req.user.roles?.some(r => ['admin', 'superadmin', 'super_admin'].includes(r));
     const isOwner = request.emp_no === req.user.emp_no;
     const userRoles = [req.user.user_type, ...(req.user.roles || [])];
     const isApprover = (request.active_approver_emp_no && String(request.active_approver_emp_no) === String(req.user.emp_no)) || userRoles.includes(request.active_approver);
@@ -644,7 +645,7 @@ router.post('/', upload.array('attachments', 10), async (req, res) => {
            WHERE ca.id = ? AND (be.sbu_id = ? OR be.sbu_id IS NULL) AND (be.b_fun_id = ? OR be.b_fun_id IS NULL) AND (be.loc_id = ? OR be.loc_id IS NULL)`,
           [final_budget_allocation_id, sbu_id, b_func_id, location_id]
         );
-        const isAdmin = ['admin', 'superadmin'].includes(req.user.user_type) || req.user.roles?.some(r => ['admin', 'superadmin'].includes(r));
+        const isAdmin = ['admin', 'superadmin', 'super_admin'].includes(req.user.user_type) || req.user.roles?.some(r => ['admin', 'superadmin', 'super_admin'].includes(r));
         if (!isAdmin && allocRows.length === 0) {
           return res.status(403).json({ success: false, message: 'Invalid budget allocation selected for your department.' });
         }
@@ -798,7 +799,7 @@ router.post('/:id/approve', async (req, res) => {
     }
 
     // BUG-03: Turn order guard
-    const isAdmin = ['admin', 'superadmin'].includes(req.user.user_type) || req.user.roles?.some(r => ['admin', 'superadmin'].includes(r));
+    const isAdmin = ['admin', 'superadmin', 'super_admin'].includes(req.user.user_type) || req.user.roles?.some(r => ['admin', 'superadmin', 'super_admin'].includes(r));
     const userRoles = [req.user.user_type, ...(req.user.roles || [])];
     const isDesignatedEmp = request.active_approver_emp_no && String(request.active_approver_emp_no) === String(req.user.emp_no);
     const isRoleMatch = userRoles.includes(request.active_approver);
@@ -989,7 +990,7 @@ router.patch('/:id', async (req, res) => {
     if (!rows.length) return res.status(404).json({ success: false, message: 'Request not found' });
     const request = rows[0];
 
-    const isAdmin = ['admin', 'superadmin'].includes(req.user.user_type) || req.user.roles?.some(r => ['admin', 'superadmin'].includes(r));
+    const isAdmin = ['admin', 'superadmin', 'super_admin'].includes(req.user.user_type) || req.user.roles?.some(r => ['admin', 'superadmin', 'super_admin'].includes(r));
     const userRoles = [req.user.user_type, ...(req.user.roles || [])];
     const isFinance = userRoles.includes('finance') || req.user.user_type === 'finance';
     const isFinanceStep = request.active_approver === 'finance';
@@ -1097,7 +1098,7 @@ router.post('/:id/reject', async (req, res) => {
     }
 
     // BUG-03: Turn order guard
-    const isAdmin = ['admin', 'superadmin'].includes(req.user.user_type) || req.user.roles?.some(r => ['admin', 'superadmin'].includes(r));
+    const isAdmin = ['admin', 'superadmin', 'super_admin'].includes(req.user.user_type) || req.user.roles?.some(r => ['admin', 'superadmin', 'super_admin'].includes(r));
     const userRoles = [req.user.user_type, ...(req.user.roles || [])];
     const isDesignatedEmp = request.active_approver_emp_no && String(request.active_approver_emp_no) === String(req.user.emp_no);
     const isRoleMatch = userRoles.includes(request.active_approver);
@@ -1272,7 +1273,7 @@ router.delete('/:id', async (req, res) => {
     }
     const request = rows[0];
 
-    const isAdmin = ['admin', 'superadmin'].includes(req.user.user_type) || req.user.roles?.some(r => ['admin', 'superadmin'].includes(r));
+    const isAdmin = ['admin', 'superadmin', 'super_admin'].includes(req.user.user_type) || req.user.roles?.some(r => ['admin', 'superadmin', 'super_admin'].includes(r));
     if (request.emp_no !== req.user.emp_no && !isAdmin) {
        await connection.rollback();
        connection.release();
