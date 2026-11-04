@@ -1010,8 +1010,38 @@ router.get('/employees-search', async (req, res) => {
 // WORKFLOW EDITOR — gcars_workflow_config table (auto-created)
 // ─────────────────────────────────────────────────────
 
-// Ensure the workflow config table exists
+// Ensure both workflow tables and necessary columns exist
 async function ensureWorkflowTable() {
+  // 1. gcars_workflows (named workflow templates)
+  await db.query(`
+    CREATE TABLE IF NOT EXISTS gcars_workflows (
+      id           INT AUTO_INCREMENT PRIMARY KEY,
+      name         VARCHAR(100) NOT NULL,
+      description  TEXT,
+      request_type VARCHAR(20) DEFAULT 'BOTH',
+      min_amount   DECIMAL(14,2) DEFAULT 0,
+      max_amount   DECIMAL(14,2) DEFAULT 999999999,
+      is_default   TINYINT(1) DEFAULT 0,
+      is_active    TINYINT(1) DEFAULT 1,
+      created_at   DATETIME DEFAULT CURRENT_TIMESTAMP,
+      updated_at   DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
+    )
+  `);
+
+  // Seed default workflow template if empty
+  const [wRows] = await db.query('SELECT COUNT(*) as cnt FROM gcars_workflows');
+  if (wRows[0].cnt === 0) {
+    await db.query(`
+      INSERT INTO gcars_workflows (id, name, description, request_type, min_amount, max_amount, is_default, is_active)
+      VALUES
+        (1, 'Standard Flow', 'Default flow for all requests', 'BOTH', 0, 999999999, 1, 1),
+        (2, 'High Value CAPEX', 'Flow for large capital expenditures', 'CAPEX', 1000000, 999999999, 0, 1),
+        (3, 'Express Bulk Flow', 'Simplified flow for low value items', 'BOTH', 0, 50000, 0, 1)
+      ON DUPLICATE KEY UPDATE name=name
+    `);
+  }
+
+  // 2. gcars_workflow_config (individual approval steps)
   await db.query(`
     CREATE TABLE IF NOT EXISTS gcars_workflow_config (
       id          INT AUTO_INCREMENT PRIMARY KEY,
@@ -1026,8 +1056,8 @@ async function ensureWorkflowTable() {
       applies_to  VARCHAR(20)  NOT NULL DEFAULT 'BOTH',
       is_active   TINYINT(1)   NOT NULL DEFAULT 1,
       description TEXT,
-      created_at  DATETIME DEFAULT NOW(),
-      updated_at  DATETIME DEFAULT NOW() ON UPDATE NOW()
+      created_at  DATETIME DEFAULT CURRENT_TIMESTAMP,
+      updated_at  DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
     )
   `);
 
@@ -1038,20 +1068,27 @@ async function ensureWorkflowTable() {
     }
   } catch (e) {}
 
-  // Seed defaults if empty
+  try {
+    const [uCols] = await db.query("SHOW COLUMNS FROM users LIKE 'default_flow_id'");
+    if (uCols.length === 0) {
+      await db.query("ALTER TABLE users ADD COLUMN default_flow_id INT DEFAULT 1");
+    }
+  } catch (e) {}
+
+  // Seed default workflow steps if empty
   const [cRows] = await db.query('SELECT COUNT(*) as cnt FROM gcars_workflow_config');
   if (cRows[0].cnt === 0) {
     await db.query(`
       INSERT INTO gcars_workflow_config
-        (step_order, step_name, department, role_key, label, amount_min, amount_max, applies_to, is_active, description)
+        (flow_id, step_order, step_name, department, role_key, label, amount_min, amount_max, applies_to, is_active, description)
       VALUES
-        (1, 'Supervisor Approval',    'All', 'supervisor',   'Supervisor',         0,         9999999999, 'BOTH',  1, 'Direct manager of the requester'),
-        (2, 'IT Admin Review',        'All', 'it_admin',     'IT / PS Admin',      0,         9999999999, 'CAPEX', 0, 'IT asset review (optional)'),
-        (3, 'Budget Owner Approval',  'All', 'budget_owner', 'Budget Owner',       0,         9999999999, 'BOTH',  1, 'Validates budget availability'),
-        (4, 'Accountant Approval',    'All', 'accountant',   'Accountant',         0,         9999999999, 'BOTH',  1, 'Finance desk verification'),
-        (5, 'CFO Approval',           'All', 'cfo',          'CFO',                500000,    9999999999, 'BOTH',  1, 'Required for amounts > ₹5L'),
-        (6, 'CMD Approval',           'All', 'cmd',          'CMD / MD',           2500000,   9999999999, 'BOTH',  1, 'Required for amounts > ₹25L'),
-        (7, 'Finance / SAP Closure',  'All', 'finance',      'Finance (SAP)',       0,         9999999999, 'BOTH',  1, 'Generates SAP asset number')
+        (1, 1, 'Supervisor Approval',    'All', 'supervisor',   'Supervisor',         0,         9999999999, 'BOTH',  1, 'Direct manager of the requester'),
+        (1, 2, 'IT Admin Review',        'All', 'it_admin',     'IT / PS Admin',      0,         9999999999, 'CAPEX', 0, 'IT asset review (optional)'),
+        (1, 3, 'Budget Owner Approval',  'All', 'budget_owner', 'Budget Owner',       0,         9999999999, 'BOTH',  1, 'Validates budget availability'),
+        (1, 4, 'Accountant Approval',    'All', 'accountant',   'Accountant',         0,         9999999999, 'BOTH',  1, 'Finance desk verification'),
+        (1, 5, 'CFO Approval',           'All', 'cfo',          'CFO',                500000,    9999999999, 'BOTH',  1, 'Required for amounts > ₹5L'),
+        (1, 6, 'CMD Approval',           'All', 'cmd',          'CMD / MD',           2500000,   9999999999, 'BOTH',  1, 'Required for amounts > ₹25L'),
+        (1, 7, 'Finance / SAP Closure',  'All', 'finance',      'Finance (SAP)',       0,         9999999999, 'BOTH',  1, 'Generates SAP asset number')
     `);
   }
 }
@@ -1059,14 +1096,19 @@ async function ensureWorkflowTable() {
 // GET /api/superadmin/workflows - list all flows
 router.get('/workflows', async (req, res) => {
   try {
+    await ensureWorkflowTable();
     const [rows] = await db.query('SELECT * FROM gcars_workflows ORDER BY id');
     res.json({ success: true, data: rows });
-  } catch (err) { res.status(500).json({ success: false, message: 'Server error' }); }
+  } catch (err) {
+    console.error('[Workflows Error]:', err);
+    res.status(500).json({ success: false, message: 'Server error: ' + err.message });
+  }
 });
 
 // POST /api/superadmin/workflows - create a flow
 router.post('/workflows', async (req, res) => {
   try {
+    await ensureWorkflowTable();
     const { name, description, request_type, min_amount, max_amount, is_default } = req.body;
     
     const finalRequestType = is_default ? 'BOTH' : (request_type || 'BOTH');
@@ -1081,12 +1123,16 @@ router.post('/workflows', async (req, res) => {
     }
 
     res.status(201).json({ success: true, message: 'Workflow created', id: result.insertId });
-  } catch (err) { res.status(500).json({ success: false, message: 'Server error' }); }
+  } catch (err) {
+    console.error('[Workflows Create Error]:', err);
+    res.status(500).json({ success: false, message: 'Server error: ' + err.message });
+  }
 });
 
 // PUT /api/superadmin/workflows/:id - update a flow
 router.put('/workflows/:id', async (req, res) => {
   try {
+    await ensureWorkflowTable();
     const { name, description, request_type, min_amount, max_amount, is_active, is_default } = req.body;
     
     // If making it default, force request_type to BOTH to cover CAPEX, OPEX, and BULK
@@ -1105,16 +1151,23 @@ router.put('/workflows/:id', async (req, res) => {
     }
 
     res.json({ success: true, message: 'Workflow updated' });
-  } catch (err) { res.status(500).json({ success: false, message: 'Server error' }); }
+  } catch (err) {
+    console.error('[Workflows Update Error]:', err);
+    res.status(500).json({ success: false, message: 'Server error: ' + err.message });
+  }
 });
 
 // DELETE /api/superadmin/workflows/:id - delete a flow
 router.delete('/workflows/:id', async (req, res) => {
   try {
+    await ensureWorkflowTable();
     await db.query('DELETE FROM gcars_workflows WHERE id = ?', [req.params.id]);
     await db.query('DELETE FROM gcars_workflow_config WHERE flow_id = ?', [req.params.id]);
     res.json({ success: true, message: 'Workflow and its steps deleted' });
-  } catch (err) { res.status(500).json({ success: false, message: 'Server error' }); }
+  } catch (err) {
+    console.error('[Workflows Delete Error]:', err);
+    res.status(500).json({ success: false, message: 'Server error: ' + err.message });
+  }
 });
 
 
@@ -1286,8 +1339,8 @@ router.post('/workflow-seed-defaults', async (req, res) => {
     for (const s of defaults) {
       await db.query(
         `INSERT INTO gcars_workflow_config
-          (department, label, role_key, step_order, applies_to, amount_min, amount_max, is_active, created_at, updated_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, NOW(), NOW())`,
+          (flow_id, department, label, role_key, step_order, applies_to, amount_min, amount_max, is_active, created_at, updated_at)
+         VALUES (1, ?, ?, ?, ?, ?, ?, ?, ?, NOW(), NOW())`,
         [department, s.label, s.role_key, s.step_order, s.applies_to, s.amount_min, s.amount_max, s.is_active]
       );
     }
