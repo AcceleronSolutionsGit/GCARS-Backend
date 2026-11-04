@@ -25,11 +25,11 @@ module.exports = {
       kill_timeout: 8000,
       env: {
         NODE_ENV: 'production',
-        PORT: process.env.PORT || 5000,
+        PORT: process.env.PORT || 5040,
       },
       env_development: {
         NODE_ENV: 'development',
-        PORT: 5000,
+        PORT: 5040,
       },
       time: true,
       merge_logs: true,

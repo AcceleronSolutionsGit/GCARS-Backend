@@ -17,7 +17,7 @@
 
 const path = require('path');
 require('dotenv').config();
-require('dotenv').config({ path: path.join(__dirname, '../.env') });
+require('dotenv').config({ path: path.join(__dirname, '../.env'), override: true });
 const express = require('express');
 const cors    = require('cors');
 
@@ -72,7 +72,7 @@ app.use((err, req, res, next) => { // eslint-disable-line no-unused-vars
 });
 
 // ── Server Start ──────────────────────────────────────────────
-const PORT = process.env.PORT || 5000;
+const PORT = process.env.PORT || 5040;
 app.listen(PORT, () => {
   console.log(`🚀 G-CARS 2 API running on http://localhost:${PORT}`);
   console.log(`📊 Environment: ${process.env.NODE_ENV || 'development'}`);
