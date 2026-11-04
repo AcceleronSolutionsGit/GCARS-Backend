@@ -38,6 +38,7 @@ const router  = express.Router();
 router.post('/login', async (req, res) => {
   try {
     const { email, password } = req.body;
+    console.log(`[Auth] Login attempt for: "${email}"`);
 
     // Validate required fields
     if (!email || !password) {
@@ -54,6 +55,7 @@ router.post('/login', async (req, res) => {
     );
 
     if (!rows.length) {
+      console.warn(`[Auth] User not found or inactive: "${email}"`);
       return res.status(401).json({ success: false, message: 'Invalid credentials' });
     }
 
@@ -73,8 +75,11 @@ router.post('/login', async (req, res) => {
     }
 
     if (!isMatch) {
+      console.warn(`[Auth] Password mismatch for: "${email}" (id: ${user.id})`);
       return res.status(401).json({ success: false, message: 'Invalid credentials' });
     }
+
+    console.log(`[Auth] Login SUCCESS for: "${email}" (id: ${user.id})`);
 
     // ── Fetch roles & permissions ──────────────────────────────
     const [roleRows] = await db.query(
