@@ -379,8 +379,8 @@ router.get('/', async (req, res) => {
 
     res.json({ success: true, data: augmentedRows, total, page: Number(page), limit: Number(limit) });
   } catch (err) {
-    console.error(err);
-    res.status(500).json({ success: false, message: 'Server error' });
+    console.error('[Request Create Error]:', err);
+    res.status(500).json({ success: false, message: 'Server error: ' + err.message });
   }
 });
 
@@ -679,9 +679,10 @@ router.post('/', upload.array('attachments', 10), async (req, res) => {
     const capex_no = `C${dateStr}${String(cnt + 1).padStart(3, '0')}`;
 
     // Get Requester Info
+    const requesterEmpNo = req.user.emp_no || 'SA001';
     const [eRows] = await db.query(
       'SELECT * FROM capex_master_employee WHERE emp_no = ? LIMIT 1',
-      [req.user.emp_no]
+      [requesterEmpNo]
     );
     const employee = eRows[0] || { sbu: 'All', name: req.user.username || 'System User' };
 
@@ -705,12 +706,12 @@ router.post('/', upload.array('attachments', 10), async (req, res) => {
         created_at, updated_at)
        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NOW(), NOW())`,
       [
-        capex_no, req.user.emp_no, final_budget_allocation_id || null, expected_date, asset_type,
-        procurement, asset_name, asset_description, asset_justification,
-        asset_quantity || 1, amount_ext_gst, budget_type, request_type || 'CAPEX', costcentre,
-        vender_name1, sap_vender_code1, vender_name2, sap_vender_code2,
-        vender_name3, sap_vender_code3, vender_name4, sap_vender_code4,
-        manufacturer, firstRole === 'Approved' ? 'Approved' : 'Initiated', firstRole, files,
+        capex_no, requesterEmpNo, final_budget_allocation_id || null, expected_date, asset_type,
+        procurement, asset_name, asset_description || null, asset_justification || null,
+        asset_quantity || 1, amount_ext_gst, budget_type, request_type || 'CAPEX', costcentre || null,
+        vender_name1 || null, sap_vender_code1 || null, vender_name2 || null, sap_vender_code2 || null,
+        vender_name3 || null, sap_vender_code3 || null, vender_name4 || null, sap_vender_code4 || null,
+        manufacturer || null, firstRole === 'Approved' ? 'Approved' : 'Initiated', firstRole, files || null,
         (request_type === 'BULK' ? sbu : null), (request_type === 'BULK' ? location : null)
       ]
     );
@@ -763,7 +764,7 @@ router.post('/', upload.array('attachments', 10), async (req, res) => {
     // Log track
     await db.query(
       "INSERT INTO capex_request_track (capex_request_id, emp_no, status, comment, created_at, updated_at) VALUES (?, ?, 'Initiated', 'Request created', NOW(), NOW())",
-      [requestId, req.user.emp_no]
+      [requestId, requesterEmpNo]
     );
 
     // Notification
@@ -784,8 +785,8 @@ router.post('/', upload.array('attachments', 10), async (req, res) => {
 
     res.status(201).json({ success: true, message: 'Request created', capex_no, id: requestId });
   } catch (err) {
-    console.error(err);
-    res.status(500).json({ success: false, message: 'Server error' });
+    console.error('[Request Create Error]:', err);
+    res.status(500).json({ success: false, message: 'Server error: ' + err.message });
   }
 });
 
@@ -1248,8 +1249,8 @@ router.post('/bulk-approve', async (req, res) => {
 
     res.json({ success: true, message: `${ids.length} requests bulk approved (Total: ₹${totalAmount.toLocaleString()})` });
   } catch (err) {
-    console.error(err);
-    res.status(500).json({ success: false, message: 'Server error' });
+    console.error('[Request Create Error]:', err);
+    res.status(500).json({ success: false, message: 'Server error: ' + err.message });
   }
 });
 
