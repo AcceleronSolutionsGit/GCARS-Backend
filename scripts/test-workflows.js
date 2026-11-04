@@ -48,25 +48,51 @@ async function run() {
   // Step 1: Admin Login
   console.log('🔑 1. Authenticating as Super Admin...');
   let adminAuth;
-  const adminCandidates = [
-    { u: 'superadmin@gainwellindia.com', p: '12345' },
-    { u: '6044', p: 'password' },
-    { u: 'superadmin', p: 'SuperAdmin@2026' },
-    { u: 'admin_gcars', p: 'Admin@1234' },
-  ];
 
-  for (const cred of adminCandidates) {
+  const customUser = process.argv[2] || process.env.ADMIN_USER;
+  const customPass = process.argv[3] || process.env.ADMIN_PASS;
+
+  const candidateList = customUser && customPass 
+    ? [{ u: customUser, p: customPass }]
+    : [
+        { u: 'superadmin@gainwellindia.com', p: '12345' },
+        { u: 'superadmin@gainwellindia.com', p: 'password' },
+        { u: 'superadmin@gainwellindia.com', p: 'Admin@1234' },
+        { u: 'superadmin@gainwellindia.com', p: 'SuperAdmin@2026' },
+        { u: 'superadmin@gainwellindia.com', p: 'admin' },
+        { u: 'superadmin', p: 'SuperAdmin@2026' },
+        { u: 'superadmin', p: 'password' },
+        { u: 'superadmin', p: '12345' },
+        { u: 'anirban.deysarkar@gainwellindia.com', p: '12345' },
+        { u: 'anirban.deysarkar@gainwellindia.com', p: 'password' },
+        { u: 'admin_gcars', p: 'Admin@1234' },
+        { u: '6044', p: 'password' },
+      ];
+
+  for (const cred of candidateList) {
     try {
-      adminAuth = await login(cred.u, cred.p);
-      console.log(`   ✅ Logged in as: ${adminAuth.user.username} (type: ${adminAuth.user.user_type}, roles: [${adminAuth.user.roles.join(', ')}])`);
-      break;
+      const auth = await login(cred.u, cred.p);
+      const isSA = ['superadmin', 'super_admin'].includes(auth.user.user_type) || 
+                   auth.user.roles?.some(r => ['superadmin', 'super_admin'].includes(r));
+      if (isSA) {
+        adminAuth = auth;
+        console.log(`   ✅ Logged in as Super Admin: "${auth.user.username}" (type: ${auth.user.user_type}, roles: [${auth.user.roles.join(', ')}])`);
+        break;
+      } else {
+        console.log(`   ℹ️  User "${cred.u}" authenticated, but role is [${auth.user.roles.join(', ')}] (not Super Admin). Trying next...`);
+      }
     } catch (e) {
-      // try next
+      // try next candidate
     }
   }
 
   if (!adminAuth) {
-    throw new Error('Could not authenticate with any known Super Admin credentials.');
+    throw new Error(
+      'Could not authenticate as a Super Admin with default credentials.\n' +
+      'Please run the script providing your superadmin credentials:\n' +
+      '  node backend/scripts/test-workflows.js <username> <password>\n' +
+      'Example: node backend/scripts/test-workflows.js superadmin@gainwellindia.com MyPassword'
+    );
   }
 
   // Step 2: Validate /api/superadmin/workflows
