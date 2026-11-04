@@ -380,7 +380,7 @@ router.get('/', async (req, res) => {
     res.json({ success: true, data: augmentedRows, total, page: Number(page), limit: Number(limit) });
   } catch (err) {
     console.error('[Request Create Error]:', err);
-    res.status(500).json({ success: false, message: 'Server error: ' + err.message });
+    res.status(500).json({ success: false, message: 'An internal error occurred while creating the request.' });
   }
 });
 
@@ -398,14 +398,14 @@ const storage = multer.diskStorage({
     cb(null, 'DOC-' + uniqueSuffix + '-' + file.originalname.replace(/\s+/g, '_'));
   }
 });
+const ALLOWED_EXTS = ['.pdf', '.png', '.jpg', '.jpeg', '.doc', '.docx', '.xls', '.xlsx'];
 const upload = multer({ 
   storage: storage, 
   limits: { fileSize: 10 * 1024 * 1024 }, // 10MB limit
   fileFilter: (req, file, cb) => {
     const ext = path.extname(file.originalname).toLowerCase();
-    const blockedExts = ['.exe', '.sh', '.bat', '.php', '.js', '.bin', '.cmd'];
-    if (blockedExts.includes(ext)) {
-      return cb(new Error('Invalid file type uploaded. Executables are not allowed.'));
+    if (!ALLOWED_EXTS.includes(ext)) {
+      return cb(new Error('Invalid file type uploaded. Allowed extensions: .pdf, .png, .jpg, .jpeg, .doc, .docx, .xls, .xlsx'));
     }
     cb(null, true);
   }
@@ -593,7 +593,7 @@ router.get('/:id', async (req, res) => {
     } });
   } catch (err) {
     console.error('Request Detail Error:', err);
-    res.status(500).json({ success: false, message: 'Server error: ' + err.message });
+    res.status(500).json({ success: false, message: 'An internal error occurred while loading request details.' });
   }
 });
 
@@ -786,7 +786,7 @@ router.post('/', upload.array('attachments', 10), async (req, res) => {
     res.status(201).json({ success: true, message: 'Request created', capex_no, id: requestId });
   } catch (err) {
     console.error('[Request Create Error]:', err);
-    res.status(500).json({ success: false, message: 'Server error: ' + err.message });
+    res.status(500).json({ success: false, message: 'An internal error occurred while creating the request.' });
   }
 });
 
@@ -812,15 +812,17 @@ router.post('/:id/approve', async (req, res) => {
        return res.status(400).json({ success: false, message: 'Request is already finalized' });
     }
 
-    // BUG-03: Turn order guard
+    // SEC-01 & BUG-03: Turn order guard & strict authorization check
     const isAdmin = ['admin', 'superadmin', 'super_admin'].includes(req.user.user_type) || req.user.roles?.some(r => ['admin', 'superadmin', 'super_admin'].includes(r));
     const userRoles = [req.user.user_type, ...(req.user.roles || [])];
     const isDesignatedEmp = request.active_approver_emp_no && String(request.active_approver_emp_no) === String(req.user.emp_no);
     const isRoleMatch = userRoles.includes(request.active_approver);
-    if (request.active_approver_emp_no && !isDesignatedEmp && !isAdmin && !isRoleMatch) {
+    const isAuthorized = isAdmin || (request.active_approver_emp_no ? (isDesignatedEmp || isRoleMatch) : isRoleMatch);
+
+    if (!isAuthorized) {
        await connection.rollback();
        connection.release();
-       return res.status(403).json({ success: false, message: 'You are not the designated approver for this step' });
+       return res.status(403).json({ success: false, message: 'Forbidden: You are not authorized to approve this workflow step' });
     }
 
     const approveLevel = request.active_approver;
@@ -1111,15 +1113,17 @@ router.post('/:id/reject', async (req, res) => {
        return res.status(400).json({ success: false, message: 'Request is already finalized' });
     }
 
-    // BUG-03: Turn order guard
+    // SEC-01 & BUG-03: Turn order guard & strict authorization check
     const isAdmin = ['admin', 'superadmin', 'super_admin'].includes(req.user.user_type) || req.user.roles?.some(r => ['admin', 'superadmin', 'super_admin'].includes(r));
     const userRoles = [req.user.user_type, ...(req.user.roles || [])];
     const isDesignatedEmp = request.active_approver_emp_no && String(request.active_approver_emp_no) === String(req.user.emp_no);
     const isRoleMatch = userRoles.includes(request.active_approver);
-    if (request.active_approver_emp_no && !isDesignatedEmp && !isAdmin && !isRoleMatch) {
+    const isAuthorized = isAdmin || (request.active_approver_emp_no ? (isDesignatedEmp || isRoleMatch) : isRoleMatch);
+
+    if (!isAuthorized) {
        await connection.rollback();
        connection.release();
-       return res.status(403).json({ success: false, message: 'You are not the designated approver for this step' });
+       return res.status(403).json({ success: false, message: 'Forbidden: You are not authorized to approve this workflow step' });
     }
 
     await connection.query(
@@ -1250,7 +1254,7 @@ router.post('/bulk-approve', async (req, res) => {
     res.json({ success: true, message: `${ids.length} requests bulk approved (Total: ₹${totalAmount.toLocaleString()})` });
   } catch (err) {
     console.error('[Request Create Error]:', err);
-    res.status(500).json({ success: false, message: 'Server error: ' + err.message });
+    res.status(500).json({ success: false, message: 'An internal error occurred while creating the request.' });
   }
 });
 

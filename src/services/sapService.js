@@ -3,6 +3,19 @@ const path = require('path');
 const db = require('../db');
 
 /**
+ * Neutralizes CSV formula injection characters (=, +, -, @)
+ * and safely escapes double quotes.
+ */
+function escapeCsvField(val) {
+  if (val === null || val === undefined) return '""';
+  let str = String(val).trim();
+  if (/^[=\+\-@\t\r]/.test(str)) {
+    str = "'" + str;
+  }
+  return `"${str.replace(/"/g, '""')}"`;
+}
+
+/**
  * SAP Integration Service
  * Generates outbound data packets for Asset Creation in SAP
  */
@@ -33,38 +46,38 @@ async function generateSAPAssetPacket(requestId) {
 
     if(items.length > 0) {
       items.forEach(item => {
-        const itemPacket = {
-          CAPEX_NO: req.capex_no,
-          ASSET_CLASS: req.sap_asset_class || 'DUMMY',
-          COMPANY_CODE: '1000',
-          PLANT: req.location || '1001',
-          COST_CENTER: req.costcentre || '9999',
-          ASSET_DESCRIPTION: item.asset_name,
-          QUANTITY: item.asset_quantity,
-          AMOUNT: item.amount_ext_gst,
-          VENDOR: req.sap_vender_code1 || '',
-          MANUFACTURER: req.manufacturer || '',
-          REQUISITIONER: req.emp_no,
-          SANCTION_NO: req.sanction_no || '',
-        };
-        csvContent += Object.values(itemPacket).join(',') + '\n';
+        const itemPacket = [
+          req.capex_no,
+          req.sap_asset_class || 'DUMMY',
+          '1000',
+          req.location || '1001',
+          req.costcentre || '9999',
+          item.asset_name,
+          item.asset_quantity,
+          item.amount_ext_gst,
+          req.sap_vender_code1 || '',
+          req.manufacturer || '',
+          req.emp_no,
+          req.sanction_no || ''
+        ];
+        csvContent += itemPacket.map(escapeCsvField).join(',') + '\n';
       });
     } else {
-        const packet = {
-          CAPEX_NO: req.capex_no,
-          ASSET_CLASS: req.sap_asset_class || 'DUMMY',
-          COMPANY_CODE: '1000',
-          PLANT: req.location || '1001',
-          COST_CENTER: req.costcentre || '9999',
-          ASSET_DESCRIPTION: req.asset_name,
-          QUANTITY: req.asset_quantity,
-          AMOUNT: req.approve_amount || req.amount_ext_gst,
-          VENDOR: req.sap_vender_code1 || '',
-          MANUFACTURER: req.manufacturer || '',
-          REQUISITIONER: req.emp_no,
-          SANCTION_NO: req.sanction_no || '',
-        };
-        csvContent += Object.values(packet).join(',');
+        const packet = [
+          req.capex_no,
+          req.sap_asset_class || 'DUMMY',
+          '1000',
+          req.location || '1001',
+          req.costcentre || '9999',
+          req.asset_name,
+          req.asset_quantity,
+          req.approve_amount || req.amount_ext_gst,
+          req.sap_vender_code1 || '',
+          req.manufacturer || '',
+          req.emp_no,
+          req.sanction_no || ''
+        ];
+        csvContent += packet.map(escapeCsvField).join(',') + '\n';
     }
     
     // In a real scenario, we'd write to an FTP folder or call an EAI middleware

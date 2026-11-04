@@ -14,8 +14,18 @@
 const express = require('express');
 const bcrypt  = require('bcryptjs');
 const jwt     = require('jsonwebtoken');
+const rateLimit = require('express-rate-limit');
 const db      = require('../db');
 const router  = express.Router();
+
+// ── Rate Limiting for Authentication ─────────────────────────
+const loginLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000, // 15 minutes
+  max: 30,                  // 30 login attempts per IP per window
+  message: { success: false, message: 'Too many login attempts from this IP. Please try again after 15 minutes.' },
+  standardHeaders: true,
+  legacyHeaders: false,
+});
 
 // ─────────────────────────────────────────────────────────────
 //  POST /api/auth/login
@@ -35,7 +45,7 @@ const router  = express.Router();
  * @body   { email: string, password: string }
  * @returns { success, token, user: { id, username, email, emp_no, user_type, roles, permissions } }
  */
-router.post('/login', async (req, res) => {
+router.post('/login', loginLimiter, async (req, res) => {
   try {
     const { email, password } = req.body;
     console.log(`[Auth] Login attempt for: "${email}"`);
@@ -61,15 +71,27 @@ router.post('/login', async (req, res) => {
 
     const user = rows[0];
 
-    // ── Password verification with old_password support ───────
-    // Check against `old_password` (plaintext) first, as per legacy system,
-    // then plaintext password, and finally bcrypt hash.
+    // ── Password verification with automatic bcrypt migration 
     let isMatch = false;
 
     if (user.old_password && password === user.old_password) {
       isMatch = true;
-    } else if (user.password && password === user.password) {
+      try {
+        const newHash = await bcrypt.hash(password, 10);
+        await db.query('UPDATE users SET password = ?, old_password = NULL WHERE id = ?', [newHash, user.id]);
+        console.log(`[Auth Migration] Migrated plaintext old_password for user ${user.id} to bcrypt`);
+      } catch (e) {
+        console.error('[Auth Migration Error]:', e);
+      }
+    } else if (user.password && password === user.password && !user.password.startsWith('$2')) {
       isMatch = true;
+      try {
+        const newHash = await bcrypt.hash(password, 10);
+        await db.query('UPDATE users SET password = ?, old_password = NULL WHERE id = ?', [newHash, user.id]);
+        console.log(`[Auth Migration] Migrated plaintext password for user ${user.id} to bcrypt`);
+      } catch (e) {
+        console.error('[Auth Migration Error]:', e);
+      }
     } else if (user.password && user.password.startsWith('$2') && await bcrypt.compare(password, user.password)) {
       isMatch = true;
     }
@@ -100,8 +122,9 @@ router.post('/login', async (req, res) => {
     const permissions = permRows.map(p => p.name);
 
     // ── Sign JWT ───────────────────────────────────────────────
-    // Payload includes user identity and authorisation data so
-    // middleware can gate routes without additional DB calls.
+    if (!process.env.JWT_SECRET) {
+      throw new Error('JWT_SECRET is not configured on server');
+    }
     const token = jwt.sign(
       {
         id:        user.id,
@@ -113,7 +136,7 @@ router.post('/login', async (req, res) => {
         roles,
         permissions,
       },
-      process.env.JWT_SECRET || 'gcars2_super_secret_jwt_key_2026',
+      process.env.JWT_SECRET,
       { expiresIn: process.env.JWT_EXPIRES_IN || '8h' }
     );
 
@@ -175,14 +198,16 @@ router.post('/change-password', require('../middleware/auth').authMiddleware, as
       return res.status(400).json({ success: false, message: 'Current password incorrect' });
     }
 
-    // Persist new password as plain text
+    // Hash new password using bcrypt before persisting
+    const hashedNewPassword = await bcrypt.hash(new_password, 10);
     await db.query(
-      'UPDATE users SET password = ?, old_password = ?, updated_at = NOW() WHERE id = ?',
-      [new_password, new_password, user.id]
+      'UPDATE users SET password = ?, old_password = NULL, updated_at = NOW() WHERE id = ?',
+      [hashedNewPassword, user.id]
     );
 
     res.json({ success: true, message: 'Password changed successfully' });
   } catch (err) {
+    console.error('[Change Password Error]:', err);
     res.status(500).json({ success: false, message: 'Server error' });
   }
 });

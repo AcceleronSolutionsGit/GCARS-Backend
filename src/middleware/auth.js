@@ -28,15 +28,25 @@ const jwt = require('jsonwebtoken');
  */
 const authMiddleware = (req, res, next) => {
   const authHeader = req.headers['authorization'];
-  if (!authHeader) {
+  let token = null;
+
+  if (authHeader) {
+    token = authHeader.startsWith('Bearer ') ? authHeader.slice(7) : authHeader;
+  } else if (req.query && req.query.token) {
+    token = req.query.token;
+  }
+
+  if (!token) {
     return res.status(401).json({ success: false, message: 'No token provided' });
   }
 
-  // Strip the 'Bearer ' prefix if present
-  const token = authHeader.startsWith('Bearer ') ? authHeader.slice(7) : authHeader;
+  if (!process.env.JWT_SECRET) {
+    console.error('[Security Alert] JWT_SECRET is not configured.');
+    return res.status(500).json({ success: false, message: 'Server configuration error' });
+  }
 
   try {
-    const decoded = jwt.verify(token, process.env.JWT_SECRET || 'gcars2_super_secret_jwt_key_2026');
+    const decoded = jwt.verify(token, process.env.JWT_SECRET);
     req.user = decoded; // payload: { id, emp_no, email, username, user_type, roles, permissions }
     next();
   } catch (err) {

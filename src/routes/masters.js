@@ -26,7 +26,7 @@
 
 const express = require('express');
 const db      = require('../db');
-const { authMiddleware } = require('../middleware/auth');
+const { authMiddleware, cfoOrAdmin } = require('../middleware/auth');
 const router  = express.Router();
 
 // Apply JWT authentication to every route in this file
@@ -486,7 +486,7 @@ router.get('/quarterly-budgets', async (req, res) => {
  * @body   { year, quarter, category, amount, allow_overflow }
  * @returns { success, message }
  */
-router.post('/quarterly-budgets', async (req, res) => {
+router.post('/quarterly-budgets', cfoOrAdmin, async (req, res) => {
   try {
     const { year, quarter, category, amount, allow_overflow } = req.body;
 
