@@ -36,7 +36,7 @@ const authMiddleware = (req, res, next) => {
   const token = authHeader.startsWith('Bearer ') ? authHeader.slice(7) : authHeader;
 
   try {
-    const decoded = jwt.verify(token, process.env.JWT_SECRET);
+    const decoded = jwt.verify(token, process.env.JWT_SECRET || 'gcars2_super_secret_jwt_key_2026');
     req.user = decoded; // payload: { id, emp_no, email, username, user_type, roles, permissions }
     next();
   } catch (err) {

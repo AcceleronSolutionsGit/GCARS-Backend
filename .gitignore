@@ -19,3 +19,10 @@ node_modules/
 
 # Coverage
 coverage/
+
+# Uploads & Generated Exports
+src/outbound_sap/*.csv
+src/uploads/*
+!src/uploads/.gitkeep
+*.zip
+

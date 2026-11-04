@@ -15,17 +15,18 @@
  * ============================================================
  */
 
+const path = require('path');
 require('dotenv').config();
+require('dotenv').config({ path: path.join(__dirname, '../.env') });
 const express = require('express');
 const cors    = require('cors');
-const path    = require('path');
 
 const app = express();
 
 // ── CORS ──────────────────────────────────────────────────────
 // Allow requests from the Vite dev server (frontend).
 // Credentials must be true for cookie-based sessions if ever used.
-app.use(cors({ origin: 'http://localhost:5173', credentials: true }));
+app.use(cors({ origin: ['http://localhost:5173', 'http://localhost:5174'], credentials: true }));
 
 // ── Body Parsers ──────────────────────────────────────────────
 // Increase JSON limit to 10 MB to support bulk upload payloads.

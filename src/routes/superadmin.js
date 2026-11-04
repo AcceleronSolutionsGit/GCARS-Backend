@@ -317,9 +317,16 @@ router.get('/allocations', cfoOrAdmin, async (req, res) => {
 // POST /api/superadmin/allocations - create allocation
 router.post('/allocations', cfoOrAdmin, async (req, res) => {
   try {
-    const { sbu_id, bfun_id, loc_id, asset_group, asset_type, budget_type, budgeted_amount, year, description } = req.body;
+    let { sbu_id, bfun_id, loc_id, asset_group, asset_type, budget_type, budgeted_amount, year, description } = req.body;
     
     let budget_entity = req.body.budget_entity;
+
+    // Apply defaults for OPEX budget if specific fields are not provided
+    if (budget_type == 3) {
+      if (!sbu_id) sbu_id = 11;
+      if (!bfun_id) bfun_id = 999;
+      if (!loc_id) loc_id = 999;
+    }
 
     if (!budget_entity && sbu_id && bfun_id && loc_id) {
       // Find or create entity

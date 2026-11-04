@@ -46,7 +46,10 @@ router.post('/login', async (req, res) => {
 
     // Look up the user by email or username; must be Active
     const [rows] = await db.query(
-      'SELECT * FROM users WHERE (email = ? OR username = ?) AND status = "Active" LIMIT 1',
+      `SELECT u.*, me.name 
+       FROM users u 
+       LEFT JOIN capex_master_employee me ON u.emp_no = me.emp_no 
+       WHERE (u.email = ? OR u.username = ?) AND u.status = "Active" LIMIT 1`,
       [email, email]
     );
 
@@ -57,24 +60,16 @@ router.post('/login', async (req, res) => {
     const user = rows[0];
 
     // ── Password verification with old_password support ───────
-    // Check against `old_password` (plaintext) first, as per legacy system.
+    // Check against `old_password` (plaintext) first, as per legacy system,
+    // then plaintext password, and finally bcrypt hash.
     let isMatch = false;
 
     if (user.old_password && password === user.old_password) {
       isMatch = true;
-      // Transparently upgrade to bcrypt in the `password` column for future use
-      const hashed = await bcrypt.hash(password, 10);
-      await db.query(
-        'UPDATE users SET password = ?, updated_at = NOW() WHERE id = ?',
-        [hashed, user.id]
-      );
-      console.log(`[Auth] Auto-migrated old_password for user id=${user.id}`);
-    } else if (user.password && user.password.startsWith('$2')) {
-      // Standard bcrypt comparison
-      isMatch = await bcrypt.compare(password, user.password);
-    } else if (user.password) {
-      // Legacy plain-text comparison on `password` column just in case
-      isMatch = (password === user.password);
+    } else if (user.password && password === user.password) {
+      isMatch = true;
+    } else if (user.password && user.password.startsWith('$2') && await bcrypt.compare(password, user.password)) {
+      isMatch = true;
     }
 
     if (!isMatch) {
@@ -106,13 +101,14 @@ router.post('/login', async (req, res) => {
       {
         id:        user.id,
         emp_no:    user.emp_no,
+        name:      user.name,
         email:     user.email,
         username:  user.username,
         user_type: user.user_type,
         roles,
         permissions,
       },
-      process.env.JWT_SECRET,
+      process.env.JWT_SECRET || 'gcars2_super_secret_jwt_key_2026',
       { expiresIn: process.env.JWT_EXPIRES_IN || '8h' }
     );
 
@@ -122,6 +118,7 @@ router.post('/login', async (req, res) => {
       user: {
         id:        user.id,
         username:  user.username,
+        name:      user.name,
         email:     user.email,
         emp_no:    user.emp_no,
         user_type: user.user_type,
@@ -163,21 +160,20 @@ router.post('/change-password', require('../middleware/auth').authMiddleware, as
     let isMatch = false;
     if (user.old_password && current_password === user.old_password) {
       isMatch = true;
-    } else if (user.password && user.password.startsWith('$2')) {
-      isMatch = await bcrypt.compare(current_password, user.password);
-    } else {
-      isMatch = (current_password === user.password);
+    } else if (user.password && current_password === user.password) {
+      isMatch = true;
+    } else if (user.password && user.password.startsWith('$2') && await bcrypt.compare(current_password, user.password)) {
+      isMatch = true;
     }
 
     if (!isMatch) {
       return res.status(400).json({ success: false, message: 'Current password incorrect' });
     }
 
-    // Hash the new password and persist it
-    const hashed = await bcrypt.hash(new_password, 10);
+    // Persist new password as plain text
     await db.query(
-      'UPDATE users SET password = ?, updated_at = NOW() WHERE id = ?',
-      [hashed, user.id]
+      'UPDATE users SET password = ?, old_password = ?, updated_at = NOW() WHERE id = ?',
+      [new_password, new_password, user.id]
     );
 
     res.json({ success: true, message: 'Password changed successfully' });
