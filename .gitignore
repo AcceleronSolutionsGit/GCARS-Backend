@@ -1,5 +1,6 @@
 # Logs
-logs
+logs/*
+!logs/.gitkeep
 *.log
 npm-debug.log*
 yarn-debug.log*
@@ -21,8 +22,12 @@ node_modules/
 coverage/
 
 # Uploads & Generated Exports
-src/outbound_sap/*.csv
+src/outbound_sap/*
+!src/outbound_sap/.gitkeep
 src/uploads/*
 !src/uploads/.gitkeep
-*.zip
 
+# Archives & Temporary files
+*.zip
+*.tar.gz
+*.rar
