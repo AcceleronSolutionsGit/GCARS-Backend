@@ -24,9 +24,8 @@ const cors    = require('cors');
 const app = express();
 
 // ── CORS ──────────────────────────────────────────────────────
-// Allow requests from the Vite dev server (frontend).
-// Credentials must be true for cookie-based sessions if ever used.
-app.use(cors({ origin: ['http://localhost:5173', 'http://localhost:5174'], credentials: true }));
+// Allow requests from frontend, local dev, and Apache reverse proxy.
+app.use(cors({ origin: true, credentials: true }));
 
 // ── Body Parsers ──────────────────────────────────────────────
 // Increase JSON limit to 10 MB to support bulk upload payloads.
